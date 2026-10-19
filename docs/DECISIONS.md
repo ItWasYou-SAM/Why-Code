@@ -114,7 +114,8 @@ offline. Any builder fetching from the network is a bug.
 can tell which hunks map to which regions; Component 2 does not guess.
 Honest graph beats complete-looking graph.
 
-**Status.** active
+**Status.** superseded by D-0029. The review-region ID is unchanged, but
+regions now also come from changed hunks and carry a `CHANGED_IN` edge.
 
 ---
 
@@ -136,6 +137,70 @@ by the `repo` node property) then reload everything. `dry_run` =
 produce the full plan and report with zero database operations.
 Incremental upsert merges every node on its source `record_id`; rerun
 of the same corpus yields identical node and relationship counts.
+
+**Status.** active
+
+---
+
+## D-0013 — 2026-10-19 — The structural parser is syntactic only
+
+**Decision.** Component 3 extracts structure: classes, methods,
+functions, module-level constants (ALL_CAPS), module-top-level imports,
+with dotted qualnames (`Client._send_handling_redirects`). NO call
+graph, NO cross-module type resolution, NO inferred semantics. If the
+answer needs semantics, Component 4 must pay for it with evidence, not
+Component 3 with guesswork.
+
+**Status.** active
+
+---
+
+## D-0014 — 2026-10-19 — Config keys are toml/yaml/env-only; linking is mention-based
+
+**Decision.** `ConfigKey` nodes come from `.toml` (dotted-section
+names), `.yaml`/`.yml`, and env-style KEY=VALUE lines. Python
+ALL_CAPS assignments stay `Symbol(kind=constant)` — they are not config
+keys. `USED_BY` links a key to symbols in files whose content mentions
+the key name — string mention, not type resolution, so cross-file links
+are allowed and honest. Region IDs follow D-0010's
+`{short}:region:{path}:{start}:{end}`; both `Symbol` and `ChangedFile`
+get HAS_REGION edges to the symbol-defining span (retrieval can enter
+from either).
+
+**Status.** active
+
+---
+
+## D-0015 — 2026-10-19 — The enricher never fetches content
+
+**Decision.** Enrichment consumes content via an injected
+`content_provider(path, source_sha)` seam. Production wiring reads from
+the store/in-blob flow; the enricher itself has no network, keeping it
+replayable and testable without GitHub.
+
+**Status.** active
+
+---
+
+## D-0016 — 2026-10-19 — Unparseable files are loud, zero-node, and non-fatal
+
+**Decision.** A file Tree-sitter can't parse produces ZERO nodes, one
+`unparseable_file` warning on the injected logger, and the run
+continues. No placeholder symbol, no guessed span. Binary/unknown
+extensions are skipped with a `skipped_binary` warning.
+
+**Status.** active
+
+---
+
+## D-0017 — 2026-10-19 — Cross-plan node re-declaration is a merge no-op
+
+**Decision.** The structure plan may re-declare nodes it references but
+does not own (e.g., `ChangedFile`, `Doc` created by earlier components)
+with minimal props (`record_id`/`repo`). Merging is idempotent (D-0012),
+so re-declaration adds nothing and keeps referential integrity inside a
+single plan without duplicating writes. Identity rests on record ids,
+never on props.
 
 **Status.** active
 
@@ -326,5 +391,131 @@ module or class, or (d) resolvable by a simple local rule such as
 Anything not provable is discarded; the plan allows an unresolved reference
 to be dropped, and a guessed edge is worse than an absent one. This extends
 D-0015 and D-0018 to the reference half of the graph.
+
+**Status.** active
+
+---
+
+## D-0027 — 2026-10-19 — Parser outputs are a resolved-ID contract
+
+**Decision.** Parsers emit four flat models defined in
+`app/structural/extraction/models.py`: `ExtractedSymbol`, `ExtractedImport`,
+`ExtractedConfigKey`, and `ExtractedCodeRegion`. Each carries a file ID and a
+deterministic record ID rather than a path/commit pair, so downstream code
+never reconstructs identity. The contract is language-agnostic: symbol kinds
+include `variable` and `type`, imports are per imported name (module, name,
+alias), config values carry a literal `value_type`, and a region records its
+provenance (`definition`, `changed_hunk`, `review_comment`, `manual`).
+
+The models enforce D-0015 at construction time: `resolved_internal` is the
+only import status permitted to carry `resolved_file_id`, the other statuses
+forbid it, and a relative import can never be labeled `resolved_external`.
+Line spans must be ordered, and IDs/names must be non-empty. The existing
+`Symbol`/`ImportRef`/`ConfigKey`/`CodeRegion` models remain the serialization
+contract for the Component 3 graph until the extractors migrate to this
+output shape; they are not a second source of truth, just the current edge of
+the migration.
+
+**Status.** active
+
+---
+
+## D-0028 — 2026-10-19 — Extraction is limited to structural definitions
+
+**Decision.** Symbols are extracted only for top-level functions, classes,
+methods, constants and simple type aliases. Constants are accepted at module
+and class scope; function-body assignments are local variables and are never
+symbols. A lambda is an expression, and `TypeVar`/`ParamSpec`/`NewType`
+factory calls are type machinery, not constants. Simple aliases are explicit
+PEP 695 `type X = ...` statements or assignments whose name is type-shaped
+and whose right-hand side is a type expression (identifier, attribute,
+subscript, union, or a forward-reference string).
+
+`qualified_name` is module-qualified (`httpx._client.Client.send`).
+`qualname` remains file-local because ownership and reference resolution
+compare within one file; the two exist side by side instead of forcing the
+graph to resolve module paths during every lookup. Nested functions are kept
+with a conservative local qualname (`outer.inner`), which is unambiguous and
+therefore satisfies the "skip or be conservative" rule.
+
+Imports are split per bound name in the parser-output model. A `File → File`
+edge is created only when the target path is in the selected set; an imported
+symbol used in code resolves to `Symbol → REFERENCES → Symbol`. Relative
+imports that do not resolve stay `unresolved` and are never reclassified as
+external packages. Third-party imports become
+`ExternalRef {kind: "package", name: <root>}` and are never traced to source.
+
+YAML keys are walked with `yaml.compose` so each key keeps the line of its
+exact mapping entry, even when the same leaf name appears under several
+parents. Each key carries the literal value and a stable `value_type`
+(`int`, `float`, `bool`, `str`, `null`, `dict`, `list`). `USED_BY` edges are
+created only for literal access (`settings["retry"]["max_attempts"]`,
+`config.retry.max_attempts`, or an exact declared-key string) and only when
+the dotted key is declared. A called attribute chain such as
+`config.retry.get(...)` is uncertain and creates no edge.
+
+**Status.** active
+
+---
+
+## D-0029 — 2026-10-19 — CodeRegion spans are explicit and commit-scoped
+
+**Decision.** A `CodeRegion` is created only from a span the evidence
+names: a symbol declaration, a unified-diff hunk, a review-comment anchor,
+or an explicitly supplied manual pin. No hunk-to-symbol mapping is
+inferred in Component 2; the structural pass owns that later.
+
+Changed hunks use the commit-scoped ID
+`{short}:region:{path}@{sha}:{start}:{end}`, matching Component 3's
+definition regions. The span is the new-file range from the `@@` header.
+A pure deletion anchors at the deletion line; a hunk with no new-side line
+(a deleted file) produces no region. A changed file without a known commit
+produces no hunk region, because there is no honest `file_id` or
+`CHANGED_IN` endpoint.
+
+Review-comment regions keep the pinned D-0010 ID
+`{short}:region:{path}:{start}:{line}` so already-shipped `COMMENTS_ON`
+edges survive. They gain `commit_sha`, `file_id`, `source`,
+`source_pr_number`, `content_hash` and `CHANGED_IN`.
+
+The commit for a PR is its latest known commit, the same anchor Component 3
+uses to choose a file version. It is not a claim that this individual
+commit introduced the hunk. `content_hash` comes from the normalized
+changed-file evidence record in Component 2 and from the parsed file
+content in Component 3.
+
+High-signal filtering is explicit: callers pass
+`high_signal_pr_numbers` to restrict changed-hunk regions. With no filter,
+every changed file with a patch is considered. A pinned file alone is not
+a manual region; a manual pin must name a line span.
+
+**Status.** active
+
+---
+
+## D-0030 — 2026-10-19 — Extraction emits graph records; writes are batched
+
+**Decision.** Extraction and mapping never build Cypher. They emit the shared
+records `GraphNode(label, key, properties)` and
+`GraphRelationship(rel_type, start_key, end_key, properties)` defined in
+`app/graph/records.py`; `GraphPlan.to_records()` and
+`StructuralGraph.to_records()` adapt the two producers. `key`/`start_key`/
+`end_key` are the existing commit-scoped IDs (D-0008, D-0029), so the record
+layer adds a transport boundary without renaming identity.
+
+`app/graph/batch_writer.py` is the only module that turns records into Cypher.
+It groups by label/relationship type, chunks at `batch_size` (default 250),
+and sends `UNWIND $nodes … MERGE … SET n += node.properties` and
+`UNWIND $relationships … MATCH … MATCH … MERGE … SET r += rel.properties`.
+Nodes are written before relationships because endpoints are matched rather
+than created. Label and relationship type are validated identifiers and are
+the only interpolated strings; all values are parameters, extending the
+injection ban already pinned at the adapter level.
+
+`GraphRecords.assert_integrity()` refuses duplicate node keys and dangling
+endpoints before the first statement, so D-0011's "failure means zero
+database operations" holds for the batched path too. The old one-statement-
+per-node/relationship adapter shapes are superseded; the schema statements
+(constraints, indexes, scoped deletes) are unchanged.
 
 **Status.** active
