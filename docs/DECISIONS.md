@@ -91,3 +91,50 @@ because the graph, CLI, and citations all embed these tokens. One target
 repo per dataset.
 
 **Status.** active
+
+---
+
+## D-0009 — 2026-10-19 — The graph builder never talks to GitHub
+
+**Decision.** Component 2 consumes ONLY the exported `normalized.jsonl`
+plus optional store lookups for replay. No direct GitHub API calls, so
+the graph is a pure function of the evidence corpus and stays replayable
+offline. Any builder fetching from the network is a bug.
+
+**Status.** active
+
+---
+
+## D-0010 — 2026-10-19 — CodeRegion in Component 2 comes from review-comment anchors only
+
+**Decision.** A `CodeRegion` node exists iff a review comment carries
+`path` plus an anchor (`line`/`start_line`). Its ID is
+`{short}:region:{path}:{start_line}:{line}`. The `Commit`→
+`CHANGED_REGION` edge is DEFERRED to Component 3, whose structural pass
+can tell which hunks map to which regions; Component 2 does not guess.
+Honest graph beats complete-looking graph.
+
+**Status.** active
+
+---
+
+## D-0011 — 2026-10-19 — Referential integrity is fail-fast, pre-write
+
+**Decision.** Any relationship whose endpoint record_id is not in the
+same load corpus raises `InvalidRecordError` BEFORE any database
+operation. The graph must never contain dangling edges; repairing them
+after the fact is how carelessness hides.
+
+**Status.** active
+
+---
+
+## D-0012 — 2026-10-19 — Rebuild and dry-run semantics
+
+**Decision.** `rebuild` = wipe this repo's nodes (DETACH DELETE scoped
+by the `repo` node property) then reload everything. `dry_run` =
+produce the full plan and report with zero database operations.
+Incremental upsert merges every node on its source `record_id`; rerun
+of the same corpus yields identical node and relationship counts.
+
+**Status.** active

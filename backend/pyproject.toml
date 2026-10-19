@@ -24,6 +24,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: touches a real external system (Neo4j/AuraDB); opt-in via env vars",
+]
 
 [tool.ruff]
 line-length = 100
