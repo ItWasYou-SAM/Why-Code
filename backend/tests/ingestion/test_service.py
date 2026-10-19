@@ -99,7 +99,11 @@ class TestHappyPath:
         count_after_run_one = store.count_records()
         rerun_client = FakeGitHubClient(all_prs())
         make_service(store, rerun_client).run()
-        assert rerun_client.total_calls() == 0, "complete PRs must not be refetched"
+        # Completed PRs are never refetched; an errored PR is retried,
+        # otherwise a transient failure would be permanent without --force.
+        assert rerun_client.calls_for_pr(DEEP) == 0
+        assert rerun_client.calls_for_pr(TRIVIAL) == 0
+        assert rerun_client.calls_for_pr(POISON) > 0
         assert store.count_records() == count_after_run_one
         assert calls_after_run_one > 0
 
@@ -180,9 +184,11 @@ class TestArtifacts:
 
         store = EvidenceStore(tmp_path / "e.db")
         svc = IngestionService(
-            github=FakeGitHubClient([deep_pr()]), store=store, repo=REPO, since="2024-01-01",
-                limit=10
+            github=FakeGitHubClient([deep_pr(), poison_pr()]), store=store, repo=REPO,
+                since="2024-01-01", limit=10
         )
         result = svc.run()
         assert result.scored[DEEP].band in {"low", "medium", "high"}
-        assert result.scored[DEEP].score >= result.scored[POISON].score or POISON in result.errored
+        # A poisoned PR is never scored: it has no trustworthy bundle.
+        assert POISON in result.errored
+        assert result.scored[DEEP].score > 0
