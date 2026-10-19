@@ -3,7 +3,7 @@ parameterized Cypher statement. Strings are pinned because the whole
 demo's replay/debug ability rests on identical statements across runs.
 If a Cypher shape must change, change test + decision together."""
 
-from fixtures import SHORT  # noqa: F401  (SHORT referenced inside test bodies)
+from graph_fixtures import SHORT  # noqa: F401  (SHORT referenced inside test bodies)
 from test_ops import make_plan
 
 from app.graph.neo4j_adapter import (

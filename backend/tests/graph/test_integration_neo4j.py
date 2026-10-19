@@ -7,7 +7,7 @@ without duplicates, and the full path for one known PR."""
 import os
 
 import pytest
-from fakes import DEEP, SHORT
+from graph_fixtures import DEEP, SHORT
 from test_builder import corpus_jsonl
 
 pytestmark = [

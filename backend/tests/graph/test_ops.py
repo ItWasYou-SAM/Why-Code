@@ -5,7 +5,7 @@ nodes, rels, integrity, counts. Everything Neo4j-specific lives behind
 the adapter, so if AuraDB semantics change, the mutation reads here."""
 
 import pytest
-from fixtures import (
+from graph_fixtures import (
     CORPUS,
     DEEP,
     DEEP_ISSUE,
@@ -40,6 +40,7 @@ class TestNodeOpsFromCorpus:
             "IssueComment",
             "Person",
             "Doc",
+            "CodeRegion",
         }
 
     def test_nodes_keyed_by_their_source_record_id(self) -> None:
@@ -110,7 +111,10 @@ class TestRelOpsFromCorpus:
 
     def test_authorship_edges(self) -> None:
         plan = make_plan()
-        authored = sorted(r for r in plan.rels if r.rel_type == "AUTHORED")
+        authored = sorted(
+            (r for r in plan.rels if r.rel_type == "AUTHORED"),
+            key=lambda r: (r.from_record_id, r.to_record_id),
+        )
         endpoints = {(r.from_record_id, r.to_record_id) for r in authored}
         assert (f"{SHORT}:person:tomchristie", f"{SHORT}:pr:{DEEP}") in endpoints
         assert (f"{SHORT}:person:tomchristie", f"{SHORT}:commit:{'a' * 40}") in endpoints
@@ -119,13 +123,26 @@ class TestRelOpsFromCorpus:
         plan = make_plan()
         rels = {r.rel_type: (r.from_record_id, r.to_record_id) for r in plan.rels}
         assert rels["DISCUSSES"] == (f"{SHORT}:pr:{DEEP}", f"{SHORT}:issue:{DEEP_ISSUE}")
-        assert rels["HAS_COMMENT"][0] == f"{SHORT}:issue:{DEEP_ISSUE}"
+        issue_comment_edges = [
+            (r.from_record_id, r.to_record_id)
+            for r in plan.rels
+            if r.rel_type == "HAS_COMMENT" and r.to_record_id == f"{SHORT}:issue_comment:789"
+        ]
+        assert issue_comment_edges == [
+            (f"{SHORT}:issue:{DEEP_ISSUE}", f"{SHORT}:issue_comment:789")
+        ]
 
     def test_review_chain_pr_review_comment(self) -> None:
         plan = make_plan()
         rels = {r.rel_type: (r.from_record_id, r.to_record_id) for r in plan.rels}
         assert rels["HAS_REVIEW"] == (f"{SHORT}:pr:{DEEP}", f"{SHORT}:review:101")
-        assert rels["HAS_COMMENT"][0] == f"{SHORT}:review:101"
+        review_comment_edges = [
+            (r.from_record_id, r.to_record_id)
+            for r in plan.rels
+            if r.rel_type == "HAS_COMMENT"
+            and r.to_record_id == f"{SHORT}:review_comment:456"
+        ]
+        assert review_comment_edges == [(f"{SHORT}:review:101", f"{SHORT}:review_comment:456")]
 
 
 class TestIntegrityFailFast:
@@ -151,7 +168,7 @@ class TestPlanReport:
     def test_report_shape_is_label_and_type_counts(self) -> None:
         report = make_plan().counts()
         assert set(report) == {"nodes", "rels"}
-        assert report["rels"]["AUTHORED"] == 4
+        assert report["rels"]["AUTHORED"] == 5
 
     def test_plan_is_ordered_for_deterministic_replay(self) -> None:
         """Byte-identical plan from the same corpus in one pass order:

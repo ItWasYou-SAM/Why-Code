@@ -7,8 +7,8 @@ nothing, integrity failure means failure before the first write)."""
 import json
 
 import pytest
-from fakes import FakeGraphSession
-from fixtures import CORPUS, DEEP, SHORT
+from graph_fakes import FakeGraphSession
+from graph_fixtures import CORPUS, DEEP, SHORT
 
 
 def corpus_jsonl() -> str:
@@ -50,7 +50,7 @@ class TestLoad:
         session, _, report = run_builder()
         assert session.executed > 0
         assert report.nodes["PullRequest"] == 2
-        assert report.rels["HAS_COMMIT"] == 2
+        assert report.rels["HAS_COMMIT"] == 3
 
     def test_load_is_traceable_through_source_record_ids(self) -> None:
         session, _, _ = run_builder()
@@ -107,11 +107,11 @@ class TestFailFastBeforeWrite:
                 "repo": "encode/httpx",
                 "pr_number": DEEP,
                 "payload": {
-                    "path": "httpx/_client.py",
+                    "path": "httpx/_missing.py",
                     "line": 5,
                     "start_line": None,
                     "side": "RIGHT",
-                    "body": "dangling",
+                    "body": "anchors a file that is not in the corpus",
                     "author": "jeez",
                 },
                 "content_hash": "x",

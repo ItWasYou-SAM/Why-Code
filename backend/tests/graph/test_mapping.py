@@ -5,7 +5,7 @@ not their implementation. If one of these tests breaks, the semantic of
 the graph change itself must be discussed, not refactored away."""
 
 import pytest
-from fixtures import CORPUS, DEEP, DEEP_ISSUE, REGION_ID, SHORT, record_by_id
+from graph_fixtures import CORPUS, DEEP, DEEP_ISSUE, REGION_ID, SHORT, record_by_id
 
 from app.core.errors import InvalidRecordError
 
