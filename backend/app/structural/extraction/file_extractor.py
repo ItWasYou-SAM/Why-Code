@@ -89,7 +89,9 @@ class FileExtractor:
             tree, encoded, repo=repo, path=path, commit_sha=commit_sha
         )
         imports = extract_imports(tree, encoded, path=path, known_paths=known_paths)
-        references = extract_references(tree, encoded, symbols=symbols)
+        references = extract_references(
+            tree, encoded, symbols=symbols, imports=imports, path=path
+        )
         config_references = extract_config_references(
             source,
             path=path,

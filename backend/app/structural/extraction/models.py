@@ -104,7 +104,12 @@ class CodeRegion(_Model):
 
 class Reference(_Model):
     source_qualname: str
-    target_symbol_id: str
+    # Filled when the target is a symbol in the same parsed file. Imported
+    # targets are carried as path+qualname until the batch resolver can see
+    # the defining file's symbols.
+    target_symbol_id: str | None = None
+    target_path: str | None = None
+    target_qualname: str | None = None
     name: str
     line: int = Field(ge=1)
     resolution: str

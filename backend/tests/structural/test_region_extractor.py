@@ -57,7 +57,15 @@ class TestReferences:
     def test_reference_target_exists_in_the_file(self) -> None:
         result = entry()
         symbol_ids = {symbol.symbol_id for symbol in result.symbols}
-        assert all(ref.target_symbol_id in symbol_ids for ref in result.references)
+        for reference in result.references:
+            if reference.target_symbol_id is not None:
+                assert reference.target_symbol_id in symbol_ids
+            else:
+                # Imported-but-cross-file: carried as path + qualname until
+                # the batch resolver sees the defining file.
+                assert reference.target_path
+                assert reference.target_qualname
+                assert reference.resolution == "imported"
 
     def test_builtins_do_not_create_references(self) -> None:
         result = entry()

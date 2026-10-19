@@ -1,14 +1,17 @@
-; References: calls and attribute access. Deliberately shallow — no type
-; inference, no dynamic dispatch. Only names written literally in code.
+; Python references: calls and attribute access.
+;
+; Deliberately shallow: we capture names written literally in code and let
+; the extractor decide whether each one is provably resolvable. No type
+; inference and no dynamic dispatch.
 
 (call
-  function: (identifier) @call_name) @call
+  function: (identifier) @reference.name) @reference.call
 
 (call
   function: (attribute
-    attribute: (identifier) @method_name)) @method_call
+    object: (_) @reference.object
+    attribute: (identifier) @reference.name)) @reference.attribute_call
 
 (attribute
-  attribute: (identifier) @attribute_name) @attribute
-
-(identifier) @identifier
+  object: (_) @reference.object
+  attribute: (identifier) @reference.name) @reference.attribute

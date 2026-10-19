@@ -186,6 +186,27 @@ class _Builder:
             self._node("ExternalRef", eid, {"module": external.module})
             self._edge("IMPORTS", fid, eid)
 
+        for resolved in entry.references:
+            # Only provably resolved references become edges; the rest were
+            # dropped by the batch resolver.
+            if not resolved.target_symbol_id:
+                continue
+            source_id = self._owner(
+                entry.path, resolved.source_qualname, resolved.line, resolved.line
+            )
+            if source_id is None:
+                continue
+            self._edge(
+                "REFERENCES",
+                source_id,
+                resolved.target_symbol_id,
+                {
+                    "name": resolved.name,
+                    "line": resolved.line,
+                    "resolution": resolved.resolution,
+                },
+            )
+
         for key in entry.config_keys:
             kid = config_key_id(repo=self.repo, source=entry.path, key=key.key)
             self._node(

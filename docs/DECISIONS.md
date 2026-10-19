@@ -306,3 +306,25 @@ parser call; lock files remain excluded even when pinned because they carry
 no structural facts worth a node.
 
 **Status.** active
+
+---
+
+## D-0026 — 2026-10-19 — Extraction is query-driven, references are shallow
+
+**Decision.** Definitions, imports, and references are read from named
+Tree-sitter queries with explicit code-navigation captures
+(`@definition.function`, `@definition.class`, `@name`, `@reference.call`,
+`@reference.attribute`, …). The extractors consume query matches; they do not
+re-walk node types by hand, so the grammar is data that can be audited and
+changed without touching Python. A `REFERENCES` edge is created only when
+the target is (a) a symbol defined in the same file, (b) an imported symbol
+whose defining file is in the batch, (c) an attribute of a known imported
+module or class, or (d) resolvable by a simple local rule such as
+`self.method`. Imported targets are carried as `target_path` +
+`target_qualname` during per-file extraction and resolved to a symbol ID by
+`resolve_imported_references` once every selected file has been extracted.
+Anything not provable is discarded; the plan allows an unresolved reference
+to be dropped, and a guessed edge is worse than an absent one. This extends
+D-0015 and D-0018 to the reference half of the graph.
+
+**Status.** active

@@ -84,7 +84,11 @@ def validate_file(entry: StructuralFile) -> ValidationReport:
             report.fail(f"relative import {imported.module!r} has no level")
 
     for reference in entry.references:
-        if reference.target_symbol_id not in seen_symbols:
+        # An unresolved imported reference is allowed to remain target-less;
+        # the batch resolver drops it before the graph is built.
+        if reference.target_symbol_id is None:
+            continue
+        if reference.resolution == "same_file" and reference.target_symbol_id not in seen_symbols:
             report.fail(
                 f"reference from {reference.source_qualname} targets "
                 f"unknown symbol {reference.target_symbol_id}"
@@ -137,6 +141,15 @@ def validate_graph(graph: StructuralGraph) -> ValidationReport:
                     f"IMPORTS targets a {target_label}; only File or ExternalRef "
                     "edges are allowed"
                 )
+        if (
+            edge.rel_type == "REFERENCES"
+            and edge.to_id in labels
+            and labels[edge.to_id] != "Symbol"
+        ):
+            report.fail(
+                f"REFERENCES targets a {labels[edge.to_id]}; only Symbol "
+                "edges are allowed"
+            )
     report.stats = {
         "nodes": len(graph.nodes),
         "edges": len(graph.edges),

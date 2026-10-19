@@ -26,7 +26,7 @@ Every rule in the structural pass obeys one constraint: *no invented
 relationships.* Import edges resolve only against the known selected path
 set, config references come only from literal access patterns, and docs link
 only when they name a target explicitly. The decisions behind these choices
-are recorded in `docs/DECISIONS.md` (D-0013 … D-0025).
+are recorded in `docs/DECISIONS.md` (D-0013 … D-0026).
 
 ### Language routing
 
@@ -45,6 +45,20 @@ A pinned path with no registered suffix is kept as lightweight metadata
 (`content_hash`, `byte_size`, `line_count`) and is never sent to a parser.
 JSON, notebooks, JavaScript, Rust, and lock files are therefore not parsed;
 lock files are skipped even when pinned.
+
+### Query-driven extraction
+
+Definitions, imports, and references come from named Tree-sitter queries
+(`app/structural/languages/queries/*.scm`) with code-navigation captures
+(`@definition.function`, `@definition.class`, `@name`, `@reference.call`,
+…). The extractor consumes query matches, not a hand-written walk of node
+types, so the grammar is auditable data.
+
+References are deliberately shallow. A `REFERENCES` edge is created only
+when the target is a symbol in the same file, an imported symbol whose
+defining file is in the batch, an attribute of a known imported module or
+class, or a simple local rule such as `self.method`. Anything else is
+discarded; there is no type inference and no dynamic dispatch.
 
 ### Content storage
 
@@ -106,6 +120,22 @@ structural pass consumes:
 cd backend
 PYTHONPATH=. ./.venv/bin/python -m app.ingestion.cli ingest \
   --repo encode/httpx --since 2024-01-01 --limit 200
+```
+
+Every ingest run writes `artifacts/ingestion_report.json` (run id, status,
+selected/processed/failed PRs, per-type record counts, high-signal count,
+API requests, remaining quota, and per-PR failures with the failing
+endpoint). The full acceptance report and its honest limits are in
+[`docs/INGESTION_REPORT.md`](docs/INGESTION_REPORT.md).
+
+```bash
+# Inspect one PR's complete evidence trail, offline
+PYTHONPATH=. ./.venv/bin/python -m app.ingestion.cli show \
+  --repo encode/httpx --pr 1131
+
+# Re-fetch only PRs marked error (completed PRs are untouched)
+PYTHONPATH=. ./.venv/bin/python -m app.ingestion.cli retry \
+  --repo encode/httpx
 ```
 
 Phase 2 — fetch content at each file's own commit:

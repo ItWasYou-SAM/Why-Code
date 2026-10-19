@@ -32,14 +32,14 @@ class LanguageParser:
 @lru_cache(maxsize=1)
 def python_parser() -> LanguageParser:
     try:
-        import tree_sitter_python
-        from tree_sitter import Language as TsLanguage
         from tree_sitter import Parser
     except ImportError as error:  # pragma: no cover - dependency is declared
         raise InvalidRecordError(
             "tree-sitter-python is not installed", component="structural"
         ) from error
-    parser = Parser(TsLanguage(tree_sitter_python.language()))
+    from app.structural.languages.python_parser import python_language
+
+    parser = Parser(python_language())
     return LanguageParser(language=Language.PYTHON, parser=parser)
 
 

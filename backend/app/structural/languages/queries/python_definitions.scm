@@ -1,22 +1,21 @@
-; Definitions: classes, functions, methods, module-level constants.
-; Decorated definitions are captured through the inner node so a single
-; extraction path handles both forms.
-
-(class_definition
-  name: (identifier) @class_name) @class_def
+; Python definitions.
+;
+; Captures follow Tree-sitter's code-navigation convention:
+;   @definition.function / @definition.class / @definition.constant
+;   @name, @parameters, @body, @value
+;
+; A decorated definition matches through its inner node; the extractor looks
+; at the parent to recover the decorators and the full declaration span.
 
 (function_definition
-  name: (identifier) @function_name) @function_def
+  name: (identifier) @name
+  parameters: (parameters) @parameters
+  body: (block) @body) @definition.function
 
-(decorated_definition
-  definition: (class_definition
-    name: (identifier) @class_name) @class_def)
+(class_definition
+  name: (identifier) @name
+  body: (block) @body) @definition.class
 
-(decorated_definition
-  definition: (function_definition
-    name: (identifier) @function_name) @function_def)
-
-(module
-  (expression_statement
-    (assignment
-      left: (identifier) @constant_name) @constant_def))
+(assignment
+  left: (identifier) @name
+  right: (_) @value) @definition.constant

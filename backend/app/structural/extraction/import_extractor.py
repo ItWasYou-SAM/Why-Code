@@ -1,7 +1,8 @@
 """Import extraction and *honest* resolution.
 
-Extraction reads exactly what is written. Resolution is attempted only
-when the target can be determined from the path alone:
+Extraction is query-driven: ``python_imports.scm`` captures each statement
+and every name it binds. Resolution then happens only when the target can be
+determined from the path alone:
 
 * absolute ``httpx._config`` -> ``httpx/_config.py`` or package ``__init__``
 * relative ``from .base import X`` -> sibling ``base.py``
@@ -16,12 +17,24 @@ from __future__ import annotations
 from typing import Any
 
 from app.structural.extraction.models import ImportKind, ImportRef
+from app.structural.languages.python_parser import run_query
 
 _PY_SUFFIXES = (".py",)
+
+_STATEMENT_CAPTURES = (
+    "import.statement",
+    "import.from_statement",
+    "import.relative_from_statement",
+)
 
 
 def _source_text(node: Any, source: bytes) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+def _first(captures: dict[str, list[Any]], key: str) -> Any | None:
+    nodes = captures.get(key)
+    return nodes[0] if nodes else None
 
 
 def _relative_prefix(node: Any, source: bytes) -> tuple[int, str]:
@@ -36,84 +49,97 @@ def extract_imports(
 ) -> list[ImportRef]:
     known = known_paths or set()
     imports: list[ImportRef] = []
-    for node in _walk(tree.root_node):
-        if node.type == "import_statement":
-            imports.extend(_plain_imports(node, source, path, known))
-        elif node.type == "import_from_statement":
-            imports.append(_from_import(node, source, path, known))
-    imports.sort(key=lambda ref: (ref.line, ref.module))
-    return imports
+    grouped: dict[int, dict[str, Any]] = {}
 
-
-def _walk(node: Any) -> Any:
-    yield node
-    for child in node.children:
-        yield from _walk(child)
-
-
-def _plain_imports(
-    node: Any, source: bytes, path: str, known: set[str]
-) -> list[ImportRef]:
-    results: list[ImportRef] = []
-    line = int(node.start_point.row) + 1
-    for child in node.children:
-        if child.type == "dotted_name":
-            module = _source_text(child, source)
-            results.append(
-                _make_ref(module, ImportKind.ABSOLUTE, 0, [], {}, False, line, path, known)
-            )
-        elif child.type == "aliased_import":
-            name_node = child.child_by_field_name("name")
-            alias_node = child.child_by_field_name("alias")
+    for _pattern, captures in run_query("python_imports.scm", tree.root_node):
+        statement = next(
+            (node for key in _STATEMENT_CAPTURES if (node := _first(captures, key))),
+            None,
+        )
+        if statement is None:
+            continue
+        if statement.type == "import_statement":
+            name_node = _first(captures, "import.name")
             if name_node is None:
                 continue
+            alias_node = _first(captures, "import.alias")
             module = _source_text(name_node, source)
             aliases = (
-                {_source_text(alias_node, source): module} if alias_node is not None else {}
+                {_source_text(alias_node, source): module}
+                if alias_node is not None
+                else {}
             )
-            results.append(
+            imports.append(
                 _make_ref(
-                    module, ImportKind.ABSOLUTE, 0, [], aliases, False, line, path, known
+                    module,
+                    ImportKind.ABSOLUTE,
+                    0,
+                    [],
+                    aliases,
+                    False,
+                    int(statement.start_point.row) + 1,
+                    path,
+                    known,
                 )
             )
-    return results
-
-
-def _from_import(node: Any, source: bytes, path: str, known: set[str]) -> ImportRef:
-    line = int(node.start_point.row) + 1
-    module_node = node.child_by_field_name("module_name")
-    module = ""
-    level = 0
-    kind = ImportKind.ABSOLUTE
-    if module_node is not None:
-        if module_node.type == "relative_import":
-            level, remainder = _relative_prefix(module_node, source)
-            module = remainder
-            kind = ImportKind.RELATIVE
-        else:
-            module = _source_text(module_node, source)
-
-    names: list[str] = []
-    aliases: dict[str, str] = {}
-    wildcard = False
-    module_id = module_node.id if module_node is not None else None
-    for child in node.children:
-        if child.id == module_id:
             continue
-        if child.type == "dotted_name":
-            names.append(_source_text(child, source))
-        elif child.type == "aliased_import":
-            name_node = child.child_by_field_name("name")
-            alias_node = child.child_by_field_name("alias")
-            if name_node is not None:
-                name = _source_text(name_node, source)
-                names.append(name)
-                if alias_node is not None:
-                    aliases[_source_text(alias_node, source)] = name
-        elif child.type == "wildcard_import":
-            wildcard = True
 
-    return _make_ref(module, kind, level, names, aliases, wildcard, line, path, known)
+        group = grouped.setdefault(
+            statement.id,
+            {
+                "node": statement,
+                "module": "",
+                "kind": ImportKind.ABSOLUTE,
+                "level": 0,
+                "names": [],
+                "aliases": {},
+                "wildcard": False,
+            },
+        )
+        relative = _first(captures, "import.relative_module")
+        absolute = _first(captures, "import.module")
+        if relative is not None:
+            level, remainder = _relative_prefix(relative, source)
+            group["level"] = level
+            group["module"] = remainder
+            group["kind"] = ImportKind.RELATIVE
+        elif absolute is not None:
+            module_node = absolute
+            if module_node.type == "relative_import":  # wildcard relative import
+                level, remainder = _relative_prefix(module_node, source)
+                group["level"] = level
+                group["module"] = remainder
+                group["kind"] = ImportKind.RELATIVE
+            else:
+                group["module"] = _source_text(module_node, source)
+        name_node = _first(captures, "import.name")
+        if name_node is not None:
+            name = _source_text(name_node, source)
+            group["names"].append(name)
+            alias_node = _first(captures, "import.alias")
+            if alias_node is not None:
+                group["aliases"][_source_text(alias_node, source)] = name
+        if _first(captures, "import.wildcard") is not None:
+            group["wildcard"] = True
+
+    for group in grouped.values():
+        statement = group["node"]
+        imports.append(
+            _make_ref(
+                group["module"],
+                group["kind"],
+                group["level"],
+                group["names"],
+                group["aliases"],
+                group["wildcard"],
+                int(statement.start_point.row) + 1,
+                path,
+                known,
+            )
+        )
+
+    imports.sort(key=lambda ref: (ref.line, ref.module))
+    return imports
 
 
 def _make_ref(
@@ -196,3 +222,6 @@ def _module_name(file_path: str) -> str:
     if file_path.endswith("/__init__"):
         file_path = file_path[: -len("/__init__")]
     return file_path.replace("/", ".")
+
+
+__all__ = ["extract_imports", "resolve_import"]

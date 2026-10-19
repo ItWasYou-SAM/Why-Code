@@ -26,6 +26,7 @@ from app.structural.extraction.models import (
     StructuralBatch,
     StructuralFile,
 )
+from app.structural.extraction.reference_extractor import resolve_imported_references
 from app.structural.graph.graph_records import StructuralGraph, build_structural_graph
 from app.structural.graph.neo4j_writer import StructuralGraphWriter, WriteReport
 from app.structural.languages.router import ExtractionHandler, handler_for_language
@@ -139,6 +140,10 @@ class StructuralPipeline:
 
         batch.files = entries
         batch.skipped = skipped
+
+        # Cross-file references need every selected file's symbols, so they
+        # resolve only after the whole selection has been extracted.
+        resolve_imported_references(entries)
 
         declared_keys = {
             key.key for entry in entries for key in entry.config_keys

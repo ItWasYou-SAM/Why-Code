@@ -1,6 +1,10 @@
 """Symbol extraction: classes, functions, methods, constants.
 
-Hierarchy comes from the syntax tree, never from indentation heuristics.
+Definitions come from the ``python_definitions.scm`` query, so the grammar is
+data rather than a hand-written walk of node types. Hierarchy is computed by
+walking each definition's ancestors to the nearest enclosing captured
+definition; indentation is never consulted.
+
 A decorated definition's region starts at its first decorator so the
 declaration is covered whole.
 """
@@ -8,10 +12,12 @@ declaration is covered whole.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from app.structural.extraction.ids import symbol_id
 from app.structural.extraction.models import Symbol, SymbolKind
+from app.structural.languages.python_parser import run_query
 
 _CONSTANT_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -19,6 +25,46 @@ _CONSTANT_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # with the same bare name as the property. The decorator is explicit, so we
 # record the role rather than letting two definitions collide on one ID.
 _ACCESSOR_ROLE = re.compile(r"\.(setter|getter|deleter)$")
+
+_DEFINITION_KINDS = {
+    "definition.function": SymbolKind.FUNCTION,
+    "definition.class": SymbolKind.CLASS,
+    "definition.constant": SymbolKind.CONSTANT,
+}
+
+
+@dataclass
+class _Definition:
+    node: Any
+    kind: SymbolKind
+    name: str
+    declaration: Any
+    decorators: list[str]
+    is_async: bool
+    qualname: str = ""
+    parent_qualname: str | None = None
+
+    @property
+    def identity(self) -> str:
+        role = _accessor_role(self.decorators)
+        return f"{self.qualname}:{role}" if role else self.qualname
+
+    @property
+    def start_line(self) -> int:
+        return int(self.declaration.start_point.row) + 1
+
+    @property
+    def end_line(self) -> int:
+        return int(self.node.end_point.row) + 1
+
+
+def _text(node: Any, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+def _first(captures: dict[str, list[Any]], key: str) -> Any | None:
+    nodes = captures.get(key)
+    return nodes[0] if nodes else None
 
 
 def _accessor_role(decorators: list[str]) -> str | None:
@@ -29,146 +75,103 @@ def _accessor_role(decorators: list[str]) -> str | None:
     return None
 
 
+def _decorators(declaration: Any, source: bytes) -> list[str]:
+    if declaration.type != "decorated_definition":
+        return []
+    return [
+        _text(child, source).lstrip("@").strip()
+        for child in declaration.children
+        if child.type == "decorator"
+    ]
 
-def _text(node: Any, source: bytes) -> str:
-    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
-
-class _SymbolWalker:
-    def __init__(self, source: bytes, *, repo: str, path: str, commit_sha: str) -> None:
-        self.source = source
-        self.repo = repo
-        self.path = path
-        self.commit_sha = commit_sha
-        self.symbols: list[Symbol] = []
-
-    def walk_module(self, root: Any) -> list[Symbol]:
-        self._walk_body(root, parent_qualname=None, parent_is_class=False)
-        self.symbols.sort(key=lambda symbol: (symbol.start_line, symbol.qualname))
-        return self.symbols
-
-    def _walk_body(self, node: Any, *, parent_qualname: str | None, parent_is_class: bool) -> None:
-        for child in node.children:
-            if child.type == "decorated_definition":
-                definition = child.child_by_field_name("definition")
-                if definition is not None:
-                    self._visit_definition(
-                        definition,
-                        declaration=child,
-                        parent_qualname=parent_qualname,
-                        parent_is_class=parent_is_class,
-                    )
-            elif child.type in {"class_definition", "function_definition"}:
-                self._visit_definition(
-                    child,
-                    declaration=child,
-                    parent_qualname=parent_qualname,
-                    parent_is_class=parent_is_class,
-                )
-            elif child.type == "expression_statement":
-                self._maybe_constant(child, parent_qualname=parent_qualname)
-            else:
-                # Descend through blocks, if/else, try, with, etc.
-                self._walk_body(
-                    child,
-                    parent_qualname=parent_qualname,
-                    parent_is_class=parent_is_class,
-                )
-
-    def _visit_definition(
-        self,
-        definition: Any,
-        *,
-        declaration: Any,
-        parent_qualname: str | None,
-        parent_is_class: bool,
-    ) -> None:
-        name_node = definition.child_by_field_name("name")
+def _collect_definitions(tree: Any, source: bytes) -> list[_Definition]:
+    found: dict[int, _Definition] = {}
+    for _pattern, captures in run_query("python_definitions.scm", tree.root_node):
+        name_node = _first(captures, "name")
         if name_node is None:
-            return
-        name = _text(name_node, self.source)
-        qualname = f"{parent_qualname}.{name}" if parent_qualname else name
-        decorators = self._decorators(declaration)
-        # A property accessor is a distinct definition of the same name; the
-        # role suffix keeps its ID unique without inventing hierarchy.
-        role = _accessor_role(decorators)
-        identity = f"{qualname}:{role}" if role else qualname
-        if definition.type == "class_definition":
-            kind = SymbolKind.CLASS
-        elif parent_is_class:
-            kind = SymbolKind.METHOD
-        else:
-            kind = SymbolKind.FUNCTION
-        self.symbols.append(
-            Symbol(
-                symbol_id=symbol_id(
-                    repo=self.repo,
-                    path=self.path,
-                    commit_sha=self.commit_sha,
-                    qualname=identity,
-                ),
-                name=name,
-                qualname=qualname,
+            continue
+        name = _text(name_node, source)
+        for key, kind in _DEFINITION_KINDS.items():
+            node = _first(captures, key)
+            if node is None or node.id in found:
+                continue
+            # Only SCREAMING_CASE assignments are constants; every other
+            # assignment is ordinary code.
+            if kind is SymbolKind.CONSTANT and not _CONSTANT_NAME.match(name):
+                continue
+            parent = node.parent
+            declaration = (
+                parent
+                if parent is not None and parent.type == "decorated_definition"
+                else node
+            )
+            found[node.id] = _Definition(
+                node=node,
                 kind=kind,
-                path=self.path,
-                commit_sha=self.commit_sha,
-                start_line=int(declaration.start_point.row) + 1,
-                end_line=int(definition.end_point.row) + 1,
-                parent_qualname=parent_qualname,
-                decorators=decorators,
-                is_async=any(child.type == "async" for child in definition.children),
-            )
-        )
-        body = definition.child_by_field_name("body")
-        if body is not None:
-            self._walk_body(
-                body,
-                parent_qualname=qualname,
-                parent_is_class=kind is SymbolKind.CLASS,
-            )
-
-    def _maybe_constant(self, statement: Any, *, parent_qualname: str | None) -> None:
-        assignment = next(
-            (child for child in statement.children if child.type == "assignment"), None
-        )
-        if assignment is None:
-            return
-        left = assignment.child_by_field_name("left")
-        if left is None or left.type != "identifier":
-            return
-        name = _text(left, self.source)
-        if not _CONSTANT_NAME.match(name):
-            return
-        qualname = f"{parent_qualname}.{name}" if parent_qualname else name
-        self.symbols.append(
-            Symbol(
-                symbol_id=symbol_id(
-                    repo=self.repo, path=self.path, commit_sha=self.commit_sha, qualname=qualname
-                ),
                 name=name,
-                qualname=qualname,
-                kind=SymbolKind.CONSTANT,
-                path=self.path,
-                commit_sha=self.commit_sha,
-                start_line=int(statement.start_point.row) + 1,
-                end_line=int(statement.end_point.row) + 1,
-                parent_qualname=parent_qualname,
+                declaration=declaration,
+                decorators=_decorators(declaration, source),
+                is_async=any(child.type == "async" for child in node.children),
             )
-        )
+    # Parents start before their children, so one pass assigns qualnames in
+    # an order where the parent is always resolved first.
+    return sorted(found.values(), key=lambda definition: definition.node.start_byte)
 
-    def _decorators(self, declaration: Any) -> list[str]:
-        if declaration.type != "decorated_definition":
-            return []
-        return [
-            _text(child, self.source).lstrip("@").strip()
-            for child in declaration.children
-            if child.type == "decorator"
-        ]
+
+def _parent_definition(
+    definition: _Definition, by_node: dict[int, _Definition]
+) -> _Definition | None:
+    ancestor = definition.node.parent
+    while ancestor is not None:
+        if ancestor.id in by_node:
+            return by_node[ancestor.id]
+        ancestor = ancestor.parent
+    return None
 
 
 def extract_symbols(
     tree: Any, source: bytes, *, repo: str, path: str, commit_sha: str
 ) -> list[Symbol]:
-    return _SymbolWalker(source, repo=repo, path=path, commit_sha=commit_sha).walk_module(
-        tree.root_node
-    )
+    definitions = _collect_definitions(tree, source)
+    by_node = {definition.node.id: definition for definition in definitions}
+    symbols: list[Symbol] = []
+
+    for definition in definitions:
+        parent = _parent_definition(definition, by_node)
+        if parent is not None:
+            definition.parent_qualname = parent.qualname
+        definition.qualname = (
+            f"{definition.parent_qualname}.{definition.name}"
+            if definition.parent_qualname
+            else definition.name
+        )
+        kind = definition.kind
+        if kind is SymbolKind.FUNCTION and parent is not None:
+            kind = SymbolKind.METHOD if parent.kind is SymbolKind.CLASS else kind
+        symbols.append(
+            Symbol(
+                symbol_id=symbol_id(
+                    repo=repo,
+                    path=path,
+                    commit_sha=commit_sha,
+                    qualname=definition.identity,
+                ),
+                name=definition.name,
+                qualname=definition.qualname,
+                kind=kind,
+                path=path,
+                commit_sha=commit_sha,
+                start_line=definition.start_line,
+                end_line=definition.end_line,
+                parent_qualname=definition.parent_qualname,
+                decorators=definition.decorators,
+                is_async=definition.is_async,
+            )
+        )
+
+    symbols.sort(key=lambda symbol: (symbol.start_line, symbol.qualname))
+    return symbols
+
+
+__all__ = ["extract_symbols"]
