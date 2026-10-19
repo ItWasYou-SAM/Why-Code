@@ -67,3 +67,27 @@ before it stays the target. If ground truth fails, swap repos (candidates:
 pytest, requests, zappa). Architecture is repo-agnostic.
 
 **Status.** active
+
+---
+
+## D-0007 — 2026-10-19 — Per-PR ingestion is atomic: any artifact failure rolls back the PR
+
+**Decision.** If any artifact of a PR fails normalization (malformed
+payload, missing required field), the entire PR is rolled back — zero
+partial writes — and marked `error` in `ingestion_state`. Salvaging
+half-ingested PRs produces half-graphs that then "prove" nonexistent
+relationships. Replay (force or resume) is the only recovery path.
+Runs never stop because one PR is poisoned.
+
+**Status.** active
+
+---
+
+## D-0008 — 2026-10-19 — Evidence ID repo token is the short name
+
+**Decision.** Evidence IDs use the short repo name (`httpx`), not the org
+slug (`encode/httpx`). Locked by test in Component 0 and made explicit here
+because the graph, CLI, and citations all embed these tokens. One target
+repo per dataset.
+
+**Status.** active

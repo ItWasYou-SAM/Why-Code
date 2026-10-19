@@ -7,10 +7,14 @@ design change, not a refactor — it happens consciously in plan + test.
 
 from app.domain.evidence_ids import (
     commit_id,
+    doc_id,
     issue_comment_id,
+    issue_id,
+    person_id,
     pr_file_id,
     pull_request_id,
     review_comment_id,
+    review_id,
 )
 
 
@@ -20,6 +24,22 @@ def test_pull_request_id() -> None:
 
 def test_commit_id() -> None:
     assert commit_id(repo="encode/httpx", sha="abc123def") == "httpx:commit:abc123def"
+
+
+def test_review_id() -> None:
+    assert review_id(repo="encode/httpx", review_id=101) == "httpx:review:101"
+
+
+def test_issue_id() -> None:
+    assert issue_id(repo="encode/httpx", number=108) == "httpx:issue:108"
+
+
+def test_person_id() -> None:
+    assert person_id(repo="encode/httpx", login="tomchristie") == "httpx:person:tomchristie"
+
+
+def test_doc_id() -> None:
+    assert doc_id(repo="encode/httpx", path="docs/decisions.md") == "httpx:doc:docs/decisions.md"
 
 
 def test_review_comment_id() -> None:
@@ -48,3 +68,13 @@ def test_pr_file_id_rejects_empty_path() -> None:
 
     with pytest.raises(ValueError):
         pr_file_id(repo="encode/httpx", number=1, path="")
+
+    with pytest.raises(ValueError):
+        person_id(repo="encode/httpx", login="")
+
+
+def test_malformed_repo_slash_pairs_are_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        pull_request_id(repo="", number=1)

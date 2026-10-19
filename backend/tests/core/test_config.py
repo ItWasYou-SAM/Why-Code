@@ -49,9 +49,9 @@ def test_settings_fail_on_missing_required_var(monkeypatch: pytest.MonkeyPatch) 
 
 def test_settings_never_secret_loggable() -> None:
     """repr must not leak secrets: logs are shared on incident threads."""
-    from app.core.config import Settings
-
     import os
+
+    from app.core.config import Settings
 
     for key, value in REQUIRED_ENV.items():
         os.environ[key] = value

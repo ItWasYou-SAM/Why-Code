@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from app.domain.record_types import RecordType
 from app.domain.records import EvidenceRecord, content_hash
-from app.domain.records_types import RecordType
 
 
 def build_record(**overrides: object) -> EvidenceRecord:
