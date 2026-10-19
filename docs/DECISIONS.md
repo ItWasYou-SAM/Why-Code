@@ -221,3 +221,71 @@ Pre-write validation (endpoint integrity, identity uniqueness) is the same
 fail-fast rule as D-0011, extended to the structural half.
 
 **Status.** active
+
+---
+
+## D-0020 — 2026-10-19 — Content is fetched at the commit and stored off-graph
+
+**Decision.** File content is always read at the file's own commit
+(`raw.githubusercontent.com/<repo>/<sha>/<path>`), never from a branch tip.
+Parsing `master` for a historical PR links the graph to code that never
+existed at that PR — false evidence. The full text is written to a
+content-addressed blob under artifact storage
+(`<content_dir>/<repo>/<sha256>.txt`, written once per distinct content)
+and described by a `ContentRecord` in `content_manifest.jsonl` carrying
+`file_id, repo, path, commit_sha, language, content_hash, byte_size,
+line_count, blob_path`. The manifest never contains the content.
+
+**Status.** active
+
+---
+
+## D-0021 — 2026-10-19 — Neo4j stores metadata, never source code
+
+**Decision.** The `File` node carries `content_hash`, `byte_size` and
+`line_count` so a citation can be verified without the code, but no file
+body is ever a node property. The codebase lives on disk; the graph holds
+structure and small retrieval-facing metadata. Storing source in Neo4j
+would duplicate the repo, bloat every query, and drift from the blob.
+
+**Status.** active
+
+---
+
+## D-0022 — 2026-10-19 — The content manifest is the replay cache
+
+**Decision.** If the manifest already has a record for `path@commit_sha`
+and its blob still exists, the pipeline reads the blob instead of fetching.
+Replay is therefore deterministic and offline. A missing blob invalidates
+the entry (refetch); a different commit is never served from a path match,
+because content identity is `path@commit_sha`, not path. This is what makes
+the Phase 2 acceptance run reproducible after the first network pass.
+
+**Status.** active
+
+---
+
+## D-0023 — 2026-10-19 — Property accessors are distinct symbols
+
+**Decision.** `@property`, `@x.setter`, `@x.getter` and `@x.deleter` define
+separate symbols that share a bare name. Their IDs append the accessor role
+(`...:BaseClient.timeout:setter`) while the human-facing `qualname` stays
+`BaseClient.timeout`. Without this, real files (httpx `_client.py` has seven
+property/setter pairs) produce duplicate symbol IDs and fail validation.
+Region and config ownership resolve by line containment within the
+qualname, so the getter and setter never claim each other's spans.
+
+**Status.** active
+
+---
+
+## D-0024 — 2026-10-19 — tree-sitter is pinned below 0.26
+
+**Decision.** `tree-sitter>=0.25.2,<0.26` with `tree-sitter-python<0.26`.
+`tree-sitter-python 0.25.0` declares `tree-sitter~=0.24`; under 0.26.0 the
+Python 3.14 runtime segfaults during garbage collection while walking a
+parsed tree. The failure is nondeterministic, so it cannot be caught by a
+normal assertion — it is pinned instead. A dependency bump must re-run the
+large-file smoke test, not just the unit suite.
+
+**Status.** active

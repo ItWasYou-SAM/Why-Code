@@ -18,15 +18,31 @@ Components 0–3 are implemented and green:
   nodes and relationships, with fail-fast endpoint integrity and dry-run
   semantics.
 - **Component 3 — structural graph builder.** Selected changed files are
-  parsed with tree-sitter into File, Symbol, CodeRegion, ConfigKey,
-  ExternalRef and Doc nodes. Selection reads only Component 1's exports;
-  the parser never walks the repository.
+  fetched **at their own commit** and parsed with tree-sitter into File,
+  Symbol, CodeRegion, ConfigKey, ExternalRef and Doc nodes. Selection reads
+  only Component 1's exports; the parser never walks the repository.
 
 Every rule in the structural pass obeys one constraint: *no invented
 relationships.* Import edges resolve only against the known selected path
 set, config references come only from literal access patterns, and docs link
 only when they name a target explicitly. The decisions behind these choices
-are recorded in `docs/DECISIONS.md` (D-0013 … D-0019).
+are recorded in `docs/DECISIONS.md` (D-0013 … D-0024).
+
+### Content storage
+
+Full file content never enters Neo4j. `app.structural.cli fetch` (or the
+`extract`/`build` commands, which fetch as they go) writes:
+
+```
+artifacts/structural/content/<repo>/<sha256>.txt     # content-addressed blob
+artifacts/structural/content_manifest.jsonl          # metadata only
+```
+
+Each manifest row is `file_id, repo, path, commit_sha, language,
+content_hash, byte_size, line_count, blob_path`. The `File` node carries
+only `content_hash`, `byte_size` and `line_count`, so a citation can be
+verified without storing the codebase in the graph. The manifest doubles as
+a replay cache: a second run reads the blob and makes no network call.
 
 ## Layout
 
@@ -74,6 +90,15 @@ PYTHONPATH=. ./.venv/bin/python -m app.ingestion.cli ingest \
   --repo encode/httpx --since 2024-01-01 --limit 200
 ```
 
+Phase 2 — fetch content at each file's own commit:
+
+```bash
+cd backend
+PYTHONPATH=. ./.venv/bin/python -m app.structural.cli fetch \
+  --repo encode/httpx --normalized ../artifacts/normalized.jsonl \
+  --high-signal ../artifacts/high_signal_prs.jsonl --remote
+```
+
 The structural pass is dry-run by default — it prints the node/edge plan and
 writes JSON manifests without touching Neo4j. It only connects when `--write`
 is passed and validation passes:
@@ -82,7 +107,7 @@ is passed and validation passes:
 cd backend
 PYTHONPATH=. ./.venv/bin/python -m app.structural.cli build \
   --repo encode/httpx --normalized ../artifacts/normalized.jsonl \
-  --high-signal ../artifacts/high_signal_prs.jsonl --write
+  --high-signal ../artifacts/high_signal_prs.jsonl --remote --write
 ```
 
 For an offline replay, pass `--content-root DIR` (a checkout of the target
