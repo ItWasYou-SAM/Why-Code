@@ -28,6 +28,7 @@ from app.structural.extraction.models import (
 )
 from app.structural.graph.graph_records import StructuralGraph, build_structural_graph
 from app.structural.graph.neo4j_writer import StructuralGraphWriter, WriteReport
+from app.structural.languages.router import ExtractionHandler, handler_for_language
 from app.structural.selection.file_selector import SelectionResult
 from app.structural.validation.graph_validator import (
     ValidationReport,
@@ -99,7 +100,7 @@ class StructuralPipeline:
 
         entries: list[StructuralFile] = []
         for selected in selection.files:
-            if selected.language is Language.MARKDOWN:
+            if handler_for_language(selected.language) is ExtractionHandler.MARKDOWN:
                 continue
             try:
                 source = self._read_content(
@@ -144,7 +145,7 @@ class StructuralPipeline:
         }
         docs: list[DocMention] = []
         for selected in selection.files:
-            if selected.language is not Language.MARKDOWN:
+            if handler_for_language(selected.language) is not ExtractionHandler.MARKDOWN:
                 continue
             try:
                 source = self._read_content(
@@ -162,14 +163,16 @@ class StructuralPipeline:
                     }
                 )
                 continue
-            docs.extend(
-                doc_mentions(
-                    source,
-                    doc_path=selected.path,
-                    known_paths=known_paths,
-                    known_config_keys=declared_keys,
-                )
+            mentions = doc_mentions(
+                source,
+                doc_path=selected.path,
+                known_paths=known_paths,
+                known_config_keys=declared_keys,
             )
+            # A Markdown file is a Doc node even when it names no target.
+            # The node records its existence; edges still require an
+            # explicit mention.
+            docs.extend(mentions or [DocMention(doc_path=selected.path)])
         batch.docs = docs
 
         graph = build_structural_graph(batch)

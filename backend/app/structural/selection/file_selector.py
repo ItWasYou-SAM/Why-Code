@@ -136,10 +136,13 @@ class FileSelector:
             if not commit_sha:
                 result.skipped.append({"path": pinned, "reason": "no_pinned_commit"})
                 continue
-            language = language_for_path(pinned)
-            if language is None:
-                result.skipped.append({"path": pinned, "reason": "unsupported_language"})
+            reason = exclusion_reason(pinned, self.config, pinned=True)
+            if reason:
+                result.skipped.append({"path": pinned, "reason": reason})
                 continue
+            # A pinned path with no registered suffix is deliberately kept as
+            # metadata-only. We never guess a parser for it.
+            language = language_for_path(pinned) or Language.OTHER
             chosen.setdefault(
                 (pinned, commit_sha),
                 SelectedFile(

@@ -12,17 +12,16 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from app.structural.extraction.models import Language
+from app.structural.languages.router import (
+    LANGUAGE_BY_KIND,
+    LANGUAGE_REGISTRY,
+    route_path,
+)
 
+# Kept for callers that only need the suffix table. It is derived from the
+# router, so selection and extraction cannot disagree about a suffix.
 LANGUAGE_BY_SUFFIX: dict[str, Language] = {
-    ".py": Language.PYTHON,
-    ".yaml": Language.YAML,
-    ".yml": Language.YAML,
-    ".toml": Language.TOML,
-    ".json": Language.JSON,
-    ".env": Language.ENV,
-    ".md": Language.MARKDOWN,
-    ".markdown": Language.MARKDOWN,
-    ".rst": Language.MARKDOWN,
+    suffix: LANGUAGE_BY_KIND[kind] for suffix, kind in LANGUAGE_REGISTRY.items()
 }
 
 GENERATED_MARKERS = (
@@ -60,14 +59,13 @@ class StructuralConfig(BaseModel):
 
 
 def language_for_path(path: str) -> Language | None:
-    lowered = path.lower()
-    for suffix, language in LANGUAGE_BY_SUFFIX.items():
-        if lowered.endswith(suffix):
-            return language
-    return None
+    """Supported language for a path; ``None`` means route it out."""
+    return route_path(path).language
 
 
-def exclusion_reason(path: str, config: StructuralConfig) -> str | None:
+def exclusion_reason(
+    path: str, config: StructuralConfig, *, pinned: bool = False
+) -> str | None:
     lowered = path.lower()
     name = lowered.rsplit("/", 1)[-1]
     if name in {lock.lower() for lock in LOCK_FILES}:
@@ -90,6 +88,6 @@ def exclusion_reason(path: str, config: StructuralConfig) -> str | None:
         return "ci_configuration"
     if not config.include_docs and language_for_path(lowered) is Language.MARKDOWN:
         return "documentation"
-    if language_for_path(lowered) is None:
+    if not pinned and language_for_path(lowered) is None:
         return "unsupported_language"
     return None

@@ -32,6 +32,7 @@ from app.structural.extraction.region_extractor import (
 )
 from app.structural.extraction.symbol_extractor import extract_symbols
 from app.structural.languages.registry import LanguageRegistry
+from app.structural.languages.router import ExtractionHandler, handler_for_language
 
 
 class FileExtractor:
@@ -63,10 +64,14 @@ class FileExtractor:
             line_count=count_lines(source),
         )
 
-        if language is Language.MARKDOWN:
+        handler = handler_for_language(language)
+
+        # Markdown and metadata-only files keep their File-level facts but
+        # contribute no symbols, imports, or regions.
+        if handler in {ExtractionHandler.MARKDOWN, ExtractionHandler.METADATA}:
             return result
 
-        if language in {Language.YAML, Language.TOML, Language.JSON, Language.ENV}:
+        if handler is ExtractionHandler.CONFIG:
             keys = extract_config_keys(source, path=path, language=language)
             result.config_keys = keys
             result.regions = regions_for_config_keys(
@@ -74,7 +79,7 @@ class FileExtractor:
             )
             return result
 
-        if language is not Language.PYTHON:
+        if handler is not ExtractionHandler.PYTHON:
             raise InvalidRecordError(
                 f"unsupported language {language}", component="structural"
             )

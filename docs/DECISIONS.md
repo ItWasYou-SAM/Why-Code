@@ -289,3 +289,20 @@ normal assertion — it is pinned instead. A dependency bump must re-run the
 large-file smoke test, not just the unit suite.
 
 **Status.** active
+
+---
+
+## D-0025 — 2026-10-19 — The language router is the only suffix authority
+
+**Decision.** Phase 3 supports a deliberately small suffix table:
+`.py`/`.pyi` → Tree-sitter Python, `.yaml`/`.yml`/`.toml` → config keys,
+`.md` → a `Doc` node only. Everything else (JSON, notebooks, JavaScript,
+Rust, lock files) is skipped. The table lives in
+`app/structural/languages/router.py`; selection, extraction, and the CLI ask
+the router rather than repeating suffix checks, so `language_for_path` cannot
+drift from what the extractor does. A manually pinned path with no
+registered suffix is included as `Language.OTHER` with metadata only and no
+parser call; lock files remain excluded even when pinned because they carry
+no structural facts worth a node.
+
+**Status.** active

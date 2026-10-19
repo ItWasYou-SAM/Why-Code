@@ -20,6 +20,8 @@ class Language(StrEnum):
     JSON = "json"
     ENV = "env"
     MARKDOWN = "markdown"
+    # A manually pinned file with no supported parser. Metadata only.
+    OTHER = "other"
 
 
 class SymbolKind(StrEnum):

@@ -26,7 +26,25 @@ Every rule in the structural pass obeys one constraint: *no invented
 relationships.* Import edges resolve only against the known selected path
 set, config references come only from literal access patterns, and docs link
 only when they name a target explicitly. The decisions behind these choices
-are recorded in `docs/DECISIONS.md` (D-0013 … D-0024).
+are recorded in `docs/DECISIONS.md` (D-0013 … D-0025).
+
+### Language routing
+
+Phase 3 routes every selected path through one suffix table
+(`app/structural/languages/router.py`):
+
+| suffix | treatment |
+| --- | --- |
+| `.py`, `.pyi` | Tree-sitter Python extraction |
+| `.yaml`, `.yml` | config-key extraction |
+| `.toml` | config-key extraction |
+| `.md` | `Doc` node only (no `File` node) |
+| anything else | skipped, unless manually pinned |
+
+A pinned path with no registered suffix is kept as lightweight metadata
+(`content_hash`, `byte_size`, `line_count`) and is never sent to a parser.
+JSON, notebooks, JavaScript, Rust, and lock files are therefore not parsed;
+lock files are skipped even when pinned.
 
 ### Content storage
 
