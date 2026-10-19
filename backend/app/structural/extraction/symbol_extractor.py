@@ -15,6 +15,20 @@ from app.structural.extraction.models import Symbol, SymbolKind
 
 _CONSTANT_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+# ``@x.setter`` / ``@x.getter`` / ``@x.deleter`` define a *second* symbol
+# with the same bare name as the property. The decorator is explicit, so we
+# record the role rather than letting two definitions collide on one ID.
+_ACCESSOR_ROLE = re.compile(r"\.(setter|getter|deleter)$")
+
+
+def _accessor_role(decorators: list[str]) -> str | None:
+    for decorator in decorators:
+        match = _ACCESSOR_ROLE.search(decorator)
+        if match:
+            return match.group(1)
+    return None
+
+
 
 def _text(node: Any, source: bytes) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
@@ -74,6 +88,11 @@ class _SymbolWalker:
             return
         name = _text(name_node, self.source)
         qualname = f"{parent_qualname}.{name}" if parent_qualname else name
+        decorators = self._decorators(declaration)
+        # A property accessor is a distinct definition of the same name; the
+        # role suffix keeps its ID unique without inventing hierarchy.
+        role = _accessor_role(decorators)
+        identity = f"{qualname}:{role}" if role else qualname
         if definition.type == "class_definition":
             kind = SymbolKind.CLASS
         elif parent_is_class:
@@ -83,7 +102,10 @@ class _SymbolWalker:
         self.symbols.append(
             Symbol(
                 symbol_id=symbol_id(
-                    repo=self.repo, path=self.path, commit_sha=self.commit_sha, qualname=qualname
+                    repo=self.repo,
+                    path=self.path,
+                    commit_sha=self.commit_sha,
+                    qualname=identity,
                 ),
                 name=name,
                 qualname=qualname,
@@ -93,7 +115,7 @@ class _SymbolWalker:
                 start_line=int(declaration.start_point.row) + 1,
                 end_line=int(definition.end_point.row) + 1,
                 parent_qualname=parent_qualname,
-                decorators=self._decorators(declaration),
+                decorators=decorators,
                 is_async=any(child.type == "async" for child in definition.children),
             )
         )
