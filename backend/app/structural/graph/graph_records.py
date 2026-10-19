@@ -96,7 +96,7 @@ class _Builder:
         self.repo = repo
         self.graph = StructuralGraph()
         self._files_by_path: dict[str, list[str]] = {}
-        self._symbol_by_qualname: dict[tuple[str, str], str] = {}
+        self._symbols_by_qualname: dict[tuple[str, str], list[tuple[str, int, int]]] = {}
         self._declared_keys: dict[str, str] = {}
 
     # -- pass 1: files ---------------------------------------------------
@@ -110,6 +110,9 @@ class _Builder:
                 "commit_sha": entry.commit_sha,
                 "language": entry.language.value,
                 "blob_sha": entry.blob_sha,
+                "content_hash": entry.content_hash,
+                "byte_size": entry.byte_size,
+                "line_count": entry.line_count,
                 "source_pr_numbers": entry.source_pr_numbers,
             },
         )
@@ -136,7 +139,9 @@ class _Builder:
                     "is_async": symbol.is_async,
                 },
             )
-            self._symbol_by_qualname[(entry.path, symbol.qualname)] = symbol.symbol_id
+            self._symbols_by_qualname.setdefault(
+                (entry.path, symbol.qualname), []
+            ).append((symbol.symbol_id, symbol.start_line, symbol.end_line))
             self._edge("DEFINES", fid, symbol.symbol_id)
 
         for region in entry.regions:
@@ -153,8 +158,11 @@ class _Builder:
             )
             self._edge("HAS_REGION", fid, region.region_id)
             if region.symbol_qualname:
-                owner_id = self._symbol_by_qualname.get(
-                    (entry.path, region.symbol_qualname)
+                owner_id = self._owner(
+                    entry.path,
+                    region.symbol_qualname,
+                    region.start_line,
+                    region.end_line,
                 )
                 if owner_id:
                     self._edge("HAS_REGION", owner_id, region.region_id)
@@ -215,9 +223,28 @@ class _Builder:
             else:
                 kid = existing
             if reference.symbol_qualname:
-                sid = self._symbol_by_qualname.get((entry.path, reference.symbol_qualname))
+                sid = self._owner(
+                    entry.path,
+                    reference.symbol_qualname,
+                    reference.line,
+                    reference.line,
+                )
                 if sid:
                     self._edge("USED_BY", kid, sid)
+
+    def _owner(
+        self, path: str, qualname: str, start_line: int, end_line: int
+    ) -> str | None:
+        """The symbol with ``qualname`` whose span contains the given lines.
+
+        A property and its setter share a qualname but never a span, so line
+        containment is what disambiguates them.
+        """
+        candidates = self._symbols_by_qualname.get((path, qualname), [])
+        for symbol_id_, symbol_start, symbol_end in candidates:
+            if symbol_start <= start_line and end_line <= symbol_end:
+                return symbol_id_
+        return candidates[0][0] if candidates else None
 
     def add_docs(self, docs: Iterable[DocMention]) -> None:
         for mention in docs:

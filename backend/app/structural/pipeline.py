@@ -15,7 +15,9 @@ from typing import Any
 
 from app.core.errors import InvalidRecordError
 from app.structural.config import StructuralConfig
+from app.structural.content.content_store import ContentRecord, ContentStore
 from app.structural.content.file_content_fetcher import ContentFetcher
+from app.structural.content.metrics import utf8_size
 from app.structural.extraction.file_extractor import FileExtractor, doc_mentions
 from app.structural.extraction.models import (
     ConfigKey,
@@ -42,11 +44,13 @@ class StructuralResult:
     write_report: WriteReport | None = None
     selection: SelectionResult | None = None
     skipped: list[dict[str, str]] = field(default_factory=list)
+    content: list[ContentRecord] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "repo": self.batch.repo,
             "files": len(self.batch.files),
+            "content_records": len(self.content),
             "validation": self.validation.as_dict(),
             "graph": self.graph.counts(),
             "write": self.write_report.as_dict() if self.write_report else None,
@@ -62,32 +66,48 @@ class StructuralPipeline:
         fetcher: ContentFetcher,
         extractor: FileExtractor | None = None,
         writer: StructuralGraphWriter | None = None,
+        content_store: ContentStore | None = None,
     ) -> None:
         self.config = config
         self.fetcher = fetcher
         self.extractor = extractor or FileExtractor()
         self.writer = writer
+        self.content_store = content_store
+
+    def _read_content(
+        self, *, repo: str, path: str, commit_sha: str, language: Language
+    ) -> str:
+        """Fetch a file at its commit. Over the byte cap, refuse — never truncate."""
+        if self.content_store is not None:
+            return self.content_store.store(
+                repo=repo,
+                path=path,
+                commit_sha=commit_sha,
+                language=language,
+                max_bytes=self.config.max_file_bytes,
+            ).content
+        source = self.fetcher.fetch(repo=repo, path=path, commit_sha=commit_sha)
+        if utf8_size(source) > self.config.max_file_bytes:
+            raise InvalidRecordError("file_too_large", component="structural")
+        return source
 
     def run(self, selection: SelectionResult) -> StructuralResult:
         known_paths = {entry.path for entry in selection.files}
         batch = StructuralBatch(repo=self.config.repo)
         skipped: list[dict[str, str]] = []
+        content_start = len(self.content_store.records) if self.content_store else 0
 
         entries: list[StructuralFile] = []
         for selected in selection.files:
+            if selected.language is Language.MARKDOWN:
+                continue
             try:
-                source = self.fetcher.fetch(
+                source = self._read_content(
                     repo=selected.repo,
                     path=selected.path,
                     commit_sha=selected.commit_sha,
+                    language=selected.language,
                 )
-                if len(source.encode("utf-8")) > self.config.max_file_bytes:
-                    skipped.append(
-                        {"path": selected.path, "reason": "file_too_large"}
-                    )
-                    continue
-                if selected.language is Language.MARKDOWN:
-                    continue
                 entry = self.extractor.extract(
                     repo=selected.repo,
                     path=selected.path,
@@ -127,10 +147,11 @@ class StructuralPipeline:
             if selected.language is not Language.MARKDOWN:
                 continue
             try:
-                source = self.fetcher.fetch(
+                source = self._read_content(
                     repo=selected.repo,
                     path=selected.path,
                     commit_sha=selected.commit_sha,
+                    language=selected.language,
                 )
             except (InvalidRecordError, OSError) as error:
                 skipped.append(
@@ -162,6 +183,12 @@ class StructuralPipeline:
         if self.writer is not None and validation.ok:
             write_report = self.writer.write(graph, repo=self.config.repo)
 
+        content: list[ContentRecord] = (
+            list(self.content_store.records[content_start:])
+            if self.content_store is not None
+            else []
+        )
+
         return StructuralResult(
             batch=batch,
             graph=graph,
@@ -169,6 +196,7 @@ class StructuralPipeline:
             write_report=write_report,
             selection=selection,
             skipped=skipped,
+            content=content,
         )
 
     def run_from_records(

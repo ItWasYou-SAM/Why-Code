@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.errors import InvalidRecordError
+from app.structural.content.metrics import content_sha256, count_lines, utf8_size
 from app.structural.extraction.config_extractor import (
     extract_config_keys,
     extract_config_references,
@@ -57,7 +58,9 @@ class FileExtractor:
             language=language,
             blob_sha=blob_sha,
             source_pr_numbers=source_pr_numbers or [],
-            line_count=source.count("\n") + (0 if source.endswith("\n") else 1),
+            content_hash=content_sha256(source),
+            byte_size=utf8_size(source),
+            line_count=count_lines(source),
         )
 
         if language is Language.MARKDOWN:

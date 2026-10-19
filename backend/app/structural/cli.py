@@ -1,6 +1,7 @@
 """Structural component CLI.
 
     python -m app.structural.cli select  --normalized ... --high-signal ...
+    python -m app.structural.cli fetch   --normalized ... [--content-root DIR]
     python -m app.structural.cli extract --normalized ... --high-signal ... --content-root DIR
     python -m app.structural.cli build   --normalized ... --content-root DIR [--write]
     python -m app.structural.cli validate --batch artifacts/structural/batch.json
@@ -17,8 +18,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from app.core.errors import AppError
+from app.core.errors import AppError, InvalidRecordError
 from app.structural.config import StructuralConfig
+from app.structural.content.content_store import ContentStore
 from app.structural.content.file_content_fetcher import (
     CachedContentFetcher,
     LocalContentFetcher,
@@ -41,6 +43,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "select":
             return _select(args)
+        if args.command == "fetch":
+            return _fetch(args)
         if args.command == "extract":
             return _extract(args)
         if args.command == "build":
@@ -98,6 +102,7 @@ def _select(args: argparse.Namespace) -> int:
 def _pipeline(args: argparse.Namespace) -> StructuralPipeline:
     config, _ = _selection(args)
     fetcher = _fetcher(args, config)
+    store = ContentStore(fetcher, config.content_dir)
     writer = None
     if getattr(args, "write", False):
         from neo4j import GraphDatabase
@@ -118,10 +123,16 @@ def _pipeline(args: argparse.Namespace) -> StructuralPipeline:
         fetcher=fetcher,
         extractor=FileExtractor(),
         writer=writer,
+        content_store=store,
     )
 
 
 def _fetcher(args: argparse.Namespace, config: StructuralConfig) -> Any:
+    if getattr(args, "remote", False):
+        from app.structural.content.file_content_fetcher import GitHubContentFetcher
+
+        # Always the raw URL at the selected commit — never a branch name.
+        return GitHubContentFetcher()
     if args.content_root:
         return CachedContentFetcher(
             LocalContentFetcher(args.content_root), config.content_dir
@@ -130,10 +141,33 @@ def _fetcher(args: argparse.Namespace, config: StructuralConfig) -> Any:
     return RecordContentFetcher(normalized)
 
 
+def _content_store(
+    args: argparse.Namespace, config: StructuralConfig, fetcher: Any
+) -> ContentStore:
+    """The manifest doubles as the replay cache for already-stored files."""
+    return ContentStore(
+        fetcher,
+        config.content_dir,
+        manifest_path=_manifest_path(args, config),
+    )
+
+
+def _manifest_path(args: argparse.Namespace, config: StructuralConfig) -> Path:
+    return Path(
+        getattr(args, "manifest", None)
+        or config.artifacts_dir / "structural" / "content_manifest.jsonl"
+    )
+
+
 def _extract(args: argparse.Namespace) -> int:
     config, selection = _selection(args)
+    fetcher = _fetcher(args, config)
+    store = _content_store(args, config, fetcher)
     pipeline = StructuralPipeline(
-        config=config, fetcher=_fetcher(args, config), extractor=FileExtractor()
+        config=config,
+        fetcher=fetcher,
+        extractor=FileExtractor(),
+        content_store=store,
     )
     result = pipeline.run(selection)
     out = Path(args.out or Path(args.artifacts_dir) / "structural" / "batch.json")
@@ -141,9 +175,50 @@ def _extract(args: argparse.Namespace) -> int:
     out.write_text(
         result.batch.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
+    manifest = _write_manifest(store, config)
     _print_summary(result)
     print(out)
+    print(manifest)
     return 0 if result.validation.ok else 1
+
+
+def _fetch(args: argparse.Namespace) -> int:
+    config, selection = _selection(args)
+    fetcher = _fetcher(args, config)
+    store = _content_store(args, config, fetcher)
+    skipped: list[dict[str, str]] = []
+    for selected in selection.files:
+        try:
+            store.store(
+                repo=selected.repo,
+                path=selected.path,
+                commit_sha=selected.commit_sha,
+                language=selected.language,
+                max_bytes=config.max_file_bytes,
+            )
+        except (InvalidRecordError, OSError) as error:
+            skipped.append(
+                {
+                    "path": selected.path,
+                    "reason": getattr(error, "message", str(error)),
+                    "commit_sha": selected.commit_sha,
+                }
+            )
+    out = Path(
+        args.out or Path(args.artifacts_dir) / "structural" / "content_manifest.jsonl"
+    )
+    store.write_manifest(out)
+    print(f"stored {len(store.records)} file(s); skipped {len(skipped)}")
+    for item in skipped:
+        print(f"SKIP {item['path']}: {item['reason']}")
+    print(out)
+    return 0
+
+
+def _write_manifest(store: ContentStore, config: StructuralConfig) -> Path:
+    out = config.artifacts_dir / "structural" / "content_manifest.jsonl"
+    store.write_manifest(out)
+    return out
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -153,6 +228,8 @@ def _build(args: argparse.Namespace) -> int:
     out = Path(args.out or Path(args.artifacts_dir) / "structural" / "build_report.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result.as_dict(), indent=2) + "\n", encoding="utf-8")
+    if pipeline.content_store is not None:
+        _write_manifest(pipeline.content_store, pipeline.config)
     _print_summary(result)
     print(out)
     return 0 if result.validation.ok else 1
@@ -190,6 +267,16 @@ def _parser() -> argparse.ArgumentParser:
         target.add_argument("--artifacts-dir", default="artifacts")
         target.add_argument("--out", default=None)
         target.add_argument("--content-root", default=None)
+        target.add_argument(
+            "--manifest",
+            default=None,
+            help="content manifest path (also used as the replay cache)",
+        )
+        target.add_argument(
+            "--remote",
+            action="store_true",
+            help="fetch content from raw.githubusercontent.com at the commit",
+        )
         target.add_argument("--pin", action="append", default=[])
         target.add_argument("--include-tests", action="store_true")
         target.add_argument("--include-ci", action="store_true")
@@ -198,6 +285,12 @@ def _parser() -> argparse.ArgumentParser:
     select = sub.add_parser("select", help="write the file selection manifest")
     common(select)
     select.set_defaults(func=_select)
+
+    fetch = sub.add_parser(
+        "fetch", help="fetch file content at its commit into artifact storage"
+    )
+    common(fetch)
+    fetch.set_defaults(func=_fetch)
 
     extract = sub.add_parser("extract", help="extract structure into a batch JSON")
     common(extract)

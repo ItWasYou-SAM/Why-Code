@@ -126,6 +126,8 @@ class StructuralFile(_Model):
     language: Language
     blob_sha: str | None = None
     source_pr_numbers: list[int] = Field(default_factory=list)
+    content_hash: str | None = None
+    byte_size: int | None = None
     line_count: int | None = None
     symbols: list[Symbol] = Field(default_factory=list)
     imports: list[ImportRef] = Field(default_factory=list)
