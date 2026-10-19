@@ -1,0 +1,7 @@
+default:
+  timeout: 5.0
+  retries:
+    enabled: false
+    max_attempts: 3
+logging:
+  level: INFO
