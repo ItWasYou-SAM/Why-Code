@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from app.core.errors import InvalidRecordError, RateLimitError
+
 REPO = "encode/httpx"
 
 DEEP = 1131
@@ -48,9 +50,11 @@ def pr_payload(
     }
 
 
-def file_payload(path: str, status: str = "modified", patch: str | None = None) -> dict[str, Any]:
+def file_payload(
+    path: str, status: str = "modified", patch: str | None = None, sha: str | None = None
+) -> dict[str, Any]:
     return {
-        "sha": "e" * 40 if path.endswith(".py") else "f" * 40,
+        "sha": sha or ("e" * 40 if path.endswith(".py") else "f" * 40),
         "filename": path,
         "status": status,
         "additions": 12 if patch else 1,
@@ -129,6 +133,12 @@ def issue_payload(number: int, title: str) -> dict[str, Any]:
     }
 
 
+DOC_CONTENTS: dict[str, str] = {
+    ("f" * 40): "# Retries\nRetries are opt-in; see PR #1131 and the outage thread.\n",
+    ("7" * 40): "# Typo fixed\n",
+}
+
+
 def deep_pr() -> dict[str, Any]:
     pr = pr_payload(DEEP, "2024-04-02T06:30:45Z", "Fix retry handling of pool timeouts")
     pr["files"] = [
@@ -200,7 +210,7 @@ def poison_pr() -> dict[str, Any]:
 
 def trivial_pr() -> dict[str, Any]:
     pr = pr_payload(TRIVIAL, "2024-04-04T02:00:00Z", "Fix typo in README", user="stranger")
-    pr["files"] = [file_payload("README.md", patch="@@ -1,1 +1,1 @@")]
+    pr["files"] = [file_payload("README.md", sha="7" * 40)]
     pr["commits"] = [commit_payload("e2" * 20, "Fix typo")]
     pr["reviews"] = []
     pr["review_comments"] = []
@@ -223,6 +233,7 @@ class FakeGitHubClient:
     def __init__(self, prs: list[dict[str, Any]]) -> None:
         self._prs = list(prs)
         self.calls: list[tuple[str, int | None]] = []
+        self.blob_failures: set[str] = set()
 
     def merged_pull_requests(
         self, repo: str, since: str, until: str | None = None
@@ -257,6 +268,18 @@ class FakeGitHubClient:
     def linked_issues(self, repo: str, number: int) -> list[dict[str, Any]]:
         self.calls.append(("linked_issues", number))
         return self._pr(number).get("issues", [])
+
+    def blob(self, repo: str, file_sha: str) -> str:
+        self.calls.append(("blob", None))
+        if file_sha in self.blob_failures:
+            raise RateLimitError(
+                f"rate limited on blob {file_sha}", component="ingestion", record_id=None
+            )
+        if file_sha not in DOC_CONTENTS:
+            raise InvalidRecordError(
+                f"no blob content for sha {file_sha}", component="ingestion", record_id=None
+            )
+        return DOC_CONTENTS[file_sha]
 
     def calls_for_pr(self, number: int) -> int:
         return sum(1 for _, pr_number in self.calls if pr_number == number)
