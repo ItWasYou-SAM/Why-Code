@@ -47,21 +47,10 @@ The UI below is the current **local prototype**, running on bundled fixture data
 
 ## How it works
 
-```mermaid
-flowchart LR
-    GH[GitHub history] --> DB[(SQLite evidence store)]
-    DB --> G[(Neo4j graph)]
-    DB --> ST[Structural enricher<br/>tree-sitter]
-    ST --> G
-    G --> DX[Decision extraction<br/>LLM proposes · code validates]
-    DX --> G
-    G -.-> R[GraphRAG retrieval<br/>not built]
-    R -.-> A[Answer with citations<br/>not built]
-    A -.-> UI[Evidence UI<br/>prototype only]
-
-    classDef planned stroke-dasharray: 5 5,stroke:#9ca3af,color:#6b7280;
-    class R,A planned;
-```
+<p align="center">
+  <img src="assets/readme/architecture.png" alt="WhyCode pipeline: GitHub history → ingestion and SQLite → graph builder → structural enricher → decision extractor, all sharing Neo4j; GraphRAG retrieval, answer API and evidence UI are next." width="100%" />
+</p>
+<p align="center"><sub><b>Built:</b> GitHub → ingestion/SQLite → graph → structure → decisions. <b>Next:</b> retrieval → answer API → UI.</sub></p>
 
 The LLM is a **proposer**, never the authority: deterministic code validates every citation against the evidence store and graph, computes confidence, detects supersession, and writes the graph.
 
