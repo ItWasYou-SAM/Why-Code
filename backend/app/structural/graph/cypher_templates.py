@@ -6,6 +6,8 @@ they come from a fixed enum-like vocabulary. Every value is a parameter.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+
 STRUCTURAL_LABELS = (
     "File",
     "Symbol",
@@ -25,13 +27,8 @@ STRUCTURAL_REL_TYPES = (
     "DECLARES",
 )
 
-MERGE_NODE = "MERGE (n:{label} {{record_id: $record_id}}) SET n += $props"
-
-MERGE_EDGE = (
-    "MERGE (a {{record_id: $from_id}}) "
-    "MERGE (b {{record_id: $to_id}}) "
-    "MERGE (a)-[r:{rel_type}]->(b) SET r += $props"
-)
+# MERGE templates live in ``app.graph.batch_writer`` so both graph halves
+# write the same batched statements. This module owns schema only.
 
 CONSTRAINT = (
     "CREATE CONSTRAINT {name} IF NOT EXISTS "
@@ -51,14 +48,6 @@ def index_name(label: str) -> str:
     return f"whycode_structural_{label.lower()}_repo_idx"
 
 
-def merge_node_statement(label: str) -> str:
-    return MERGE_NODE.format(label=label)
-
-
-def merge_edge_statement(rel_type: str) -> str:
-    return MERGE_EDGE.format(rel_type=rel_type)
-
-
 def constraint_statement(label: str) -> str:
     return CONSTRAINT.format(name=constraint_name(label), label=label)
 
@@ -69,3 +58,12 @@ def index_statement(label: str) -> str:
 
 def delete_statement(label: str) -> str:
     return DELETE_BY_REPO.format(label=label)
+
+
+def schema_statements(labels: Iterable[str] = STRUCTURAL_LABELS) -> Iterator[str]:
+    """Constraint + index setup for the structural labels, idempotent."""
+    labels = list(labels)
+    for label in labels:
+        yield constraint_statement(label)
+    for label in labels:
+        yield index_statement(label)

@@ -18,6 +18,7 @@ from app.structural.config import StructuralConfig
 from app.structural.content.content_store import ContentRecord, ContentStore
 from app.structural.content.file_content_fetcher import ContentFetcher
 from app.structural.content.metrics import utf8_size
+from app.structural.extraction.config_extractor import extract_config_references
 from app.structural.extraction.file_extractor import FileExtractor, doc_mentions
 from app.structural.extraction.models import (
     ConfigKey,
@@ -100,6 +101,7 @@ class StructuralPipeline:
         content_start = len(self.content_store.records) if self.content_store else 0
 
         entries: list[StructuralFile] = []
+        sources: dict[str, str] = {}
         for selected in selection.files:
             if handler_for_language(selected.language) is ExtractionHandler.MARKDOWN:
                 continue
@@ -110,6 +112,7 @@ class StructuralPipeline:
                     commit_sha=selected.commit_sha,
                     language=selected.language,
                 )
+                sources[selected.path] = source
                 entry = self.extractor.extract(
                     repo=selected.repo,
                     path=selected.path,
@@ -141,13 +144,33 @@ class StructuralPipeline:
         batch.files = entries
         batch.skipped = skipped
 
+        # Config references are extracted twice on purpose: the first pass
+        # cannot know which keys other config files declare, so only the
+        # second pass can match a literal string such as
+        # ``"retry.max_attempts"`` against a declared key.
+        declared_keys = {
+            key.key for entry in entries for key in entry.config_keys
+        }
+        for entry in entries:
+            if handler_for_language(entry.language) is not ExtractionHandler.PYTHON:
+                continue
+            entry_source = sources.get(entry.path)
+            if entry_source is None:
+                continue
+            entry.config_references = extract_config_references(
+                entry_source,
+                path=entry.path,
+                declared_keys=declared_keys,
+                symbol_ranges=[
+                    (symbol.qualname, symbol.start_line, symbol.end_line)
+                    for symbol in entry.symbols
+                ],
+            )
+
         # Cross-file references need every selected file's symbols, so they
         # resolve only after the whole selection has been extracted.
         resolve_imported_references(entries)
 
-        declared_keys = {
-            key.key for entry in entries for key in entry.config_keys
-        }
         docs: list[DocMention] = []
         for selected in selection.files:
             if handler_for_language(selected.language) is not ExtractionHandler.MARKDOWN:
@@ -182,8 +205,11 @@ class StructuralPipeline:
 
         graph = build_structural_graph(batch)
         validation = validate_batch(batch)
-        graph_validation = validate_graph(graph)
+        graph_validation = validate_graph(graph, batch=batch)
         validation.errors.extend(graph_validation.errors)
+        validation.warnings.extend(graph_validation.warnings)
+        validation.not_checked.extend(graph_validation.not_checked)
+        validation.stats.update(graph_validation.stats)
         if not graph_validation.ok:
             validation.ok = False
 

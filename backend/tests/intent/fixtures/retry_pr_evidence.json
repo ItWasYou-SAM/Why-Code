@@ -1,0 +1,208 @@
+[
+  {
+    "record_id": "httpx:pr:1419",
+    "record_type": "pull_request",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "number": 1419,
+      "title": "Restrict retries to connection errors",
+      "author": "tomchristie",
+      "merged": true,
+      "merged_at": "2024-04-02T06:30:45Z",
+      "url": "https://github.com/encode/httpx/pull/1419",
+      "body": "This change makes retries opt-in and limits them to connection errors. Because retrying a read or write request can duplicate server side effects, the client must never retry anything except a connect failure.",
+      "labels": [
+        "enhancement"
+      ]
+    },
+    "content_hash": "bf2002c6c5bcd5d8d168409f4515444735dcd944aa9c3b224b50203896917ca2",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "record_type": "commit",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "message": "Only retry connection errors\n\nBecause retrying other errors can duplicate requests we avoid it.",
+      "author": "tomchristie",
+      "committed_at": "2024-03-31T10:00:00Z"
+    },
+    "content_hash": "032b340c62998fe2447b410ed3a4a93af863c063a2481037be406a3871206b3f",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:pr:1419:file:httpx/_client.py",
+    "record_type": "changed_file",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "path": "httpx/_client.py",
+      "previous_filename": null,
+      "status": "modified",
+      "additions": 6,
+      "deletions": 1,
+      "patch": "@@ -100,6 +100,12 @@ def _send_handling_redirects(self, request):\n         while True:\n             try:\n                 response = self._send_single_request(request)\n             except ConnectError as exc:\n-                raise\n+                if self.retries:\n+                    retries += 1\n+                    continue\n+                raise"
+    },
+    "content_hash": "ac0b33ae9fd5ed0be3df260d53060ba2b0fc8db55ce06bc3315b00004d445a4d",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:pr:1419:file:pyproject.toml",
+    "record_type": "changed_file",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "path": "pyproject.toml",
+      "previous_filename": null,
+      "status": "modified",
+      "additions": 1,
+      "deletions": 0,
+      "patch": "@@ -1,3 +1,4 @@\n [project]\n name = \"httpx\"\n+description = \"HTTP client\""
+    },
+    "content_hash": "985a8e3d09e24bf5e4502f650c740014a131f037980a1fa04a366c9c85aab14e",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:review:2001",
+    "record_type": "review",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "state": "CHANGES_REQUESTED",
+      "author": "lovelydinosaur",
+      "submitted_at": "2024-03-30T09:00:00Z",
+      "body": "I think we should be careful: a retried request must not duplicate side effects."
+    },
+    "content_hash": "8124176277d2e8bedee6796e837859e9ad8cfe77d1d01c62e97373114264a91b",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:review_comment:123",
+    "record_type": "review_comment",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "path": "httpx/_client.py",
+      "line": 105,
+      "start_line": 100,
+      "side": "RIGHT",
+      "body": "Should we only retry connection errors here? Retrying reads can duplicate side effects.",
+      "author": "lovelydinosaur",
+      "created_at": "2024-03-30T09:05:00Z",
+      "url": "https://github.com/encode/httpx/pull/1419#discussion_r123",
+      "pull_request_review_id": 2001
+    },
+    "content_hash": "c786b063660236a0629029e825e8c78eaf5b91ab8ca87f63cf6286cc9e6c9ae9",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:review_comment:124",
+    "record_type": "review_comment",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "path": "httpx/_client.py",
+      "line": 106,
+      "start_line": 100,
+      "side": "RIGHT",
+      "body": "Agreed, this is the behaviour we want.",
+      "author": "sethmlarson",
+      "created_at": "2024-03-30T09:10:00Z",
+      "url": "https://github.com/encode/httpx/pull/1419#discussion_r124",
+      "pull_request_review_id": 2001
+    },
+    "content_hash": "dc372b681cd577a4e2d77a8c649aae70d964c8ea0360c422b5d0a6733277aa01",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:issue:1234",
+    "record_type": "issue",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "number": 1234,
+      "title": "Retries can duplicate POST requests",
+      "state": "closed",
+      "url": "https://github.com/encode/httpx/issues/1234",
+      "author": "someone",
+      "body": "This is a bug and can crash callers when a retry duplicates a write."
+    },
+    "content_hash": "185f6712256a99d0634b2c2bbeca92b79cb33a1019179665b07e1cc88131754f",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:issue_comment:9001",
+    "record_type": "issue_comment",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "body": "We hit a timeout regression because retries duplicated writes.",
+      "author": "sethmlarson",
+      "created_at": "2024-03-29T12:00:00Z",
+      "url": "https://github.com/encode/httpx/issues/1234#issuecomment-9001",
+      "issue_number": 1234
+    },
+    "content_hash": "8b87f67b891380651020e9951929ccdd2dc7b63d1f6722fd13c8234f5986bbdb",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:doc:docs/advanced/retries.md",
+    "record_type": "doc_file",
+    "repo": "encode/httpx",
+    "pr_number": 1419,
+    "payload": {
+      "path": "docs/advanced/retries.md",
+      "content": "Retries are limited to connection errors because retrying other requests can duplicate side effects. This is a constraint the client must never violate.",
+      "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "content_hash": "cadc08e2d647e9d49feefd9a5bf2eebab16149cbda0dd7d2ee3c290c73f8148e",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:tomchristie",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "tomchristie"
+    },
+    "content_hash": "6944b279cb3e070c5116b4a79896d5a8a7098149c57031dca0029bb939a2df9a",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:lovelydinosaur",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "lovelydinosaur"
+    },
+    "content_hash": "7ab7eb6ac5942ddb7e6368d0fe1dda36c26ac2cf90cb079f4f45ee83b17674d0",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:sethmlarson",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "sethmlarson"
+    },
+    "content_hash": "bc8090348aa8bd616dd5590b64344802ebd55486b0fad3278c312cc3ae609abc",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:someone",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "someone"
+    },
+    "content_hash": "19ceed79f3ff66af0ac58d8defdb018580ead8a270370f9c3c500eefb5f92321",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  }
+]

@@ -1,32 +1,45 @@
-"""Neo4j adapter contracts: each op translates to exactly one
-parameterized Cypher statement. Strings are pinned because the whole
-demo's replay/debug ability rests on identical statements across runs.
-If a Cypher shape must change, change test + decision together."""
+"""Neo4j adapter contracts: a plan becomes batched, parameterized Cypher.
+
+Statement shapes are pinned because identical Cypher across runs is what
+makes replays debuggable. Identical node labels / relationship types share
+one ``UNWIND`` statement and every value travels as a parameter; if a Cypher
+shape must change, change test + decision together.
+"""
 
 from graph_fixtures import SHORT  # noqa: F401  (SHORT referenced inside test bodies)
 from test_ops import make_plan
 
 from app.graph.neo4j_adapter import (
     constraint_name,
+    constraint_statements,
     delete_nodes,
     index_name,
-    merge_node_statement,
-    merge_rel_statement,
+    index_statements,
     translate,
 )
 
 
 class TestStatementShapes:
-    def test_node_merge_is_parameterized(self) -> None:
-        statement = merge_node_statement(label="PullRequest")
-        assert statement == "MERGE (n:PullRequest {record_id: $record_id}) SET n += $props"
+    def test_node_batch_is_parameterized(self) -> None:
+        from app.graph.batch_writer import merge_node_batch_statement
 
-    def test_rel_merge_is_parameterized(self) -> None:
-        statement = merge_rel_statement(rel_type="HAS_COMMIT")
-        assert (
-            statement
-            == "MERGE (a {record_id: $from_record_id}) MERGE (b {record_id: $to_record_id}) "
-            "MERGE (a)-[r:HAS_COMMIT]->(b) SET r += $props"
+        statement = merge_node_batch_statement(label="PullRequest")
+        assert statement == (
+            "UNWIND $nodes AS node "
+            "MERGE (n:PullRequest {record_id: node.key}) "
+            "SET n += node.properties"
+        )
+
+    def test_relationship_batch_is_parameterized(self) -> None:
+        from app.graph.batch_writer import merge_relationship_batch_statement
+
+        statement = merge_relationship_batch_statement(rel_type="HAS_COMMIT")
+        assert statement == (
+            "UNWIND $relationships AS rel "
+            "MATCH (a {record_id: rel.start_key}) "
+            "MATCH (b {record_id: rel.end_key}) "
+            "MERGE (a)-[r:HAS_COMMIT]->(b) "
+            "SET r += rel.properties"
         )
 
     def test_constraint_names_are_label_derived(self) -> None:
@@ -43,28 +56,41 @@ class TestStatementShapes:
 
 
 class TestTranslation:
-    def test_translated_plan_yields_one_statement_per_op(self) -> None:
+    def test_each_label_becomes_one_statement(self) -> None:
         plan = make_plan()
-        statements = list(translate(plan))
-        assert len(statements) == len(plan.nodes) + len(plan.rels)
+        statements = translate(plan)
+        labels = {node.label for node in plan.nodes}
+        assert len(statements) == len(labels) + len({rel.rel_type for rel in plan.rels})
+
+    def test_batch_size_splits_a_label(self) -> None:
+        from app.graph.batch_writer import record_statements
+
+        plan = make_plan()
+        batched = record_statements(plan.to_records(), batch_size=1)
+        # Every statement carries at most one entry, so one per node or rel.
+        assert len(batched) == len(plan.nodes) + len(plan.rels)
 
     def test_translation_params_carry_source_record_ids(self) -> None:
         plan = make_plan()
-        statements = list(translate(plan))
-        rel_statements = [(q, p) for q, p in statements if "MERGE (a" in q]
-        targets = {p["to_record_id"] for _, p in rel_statements}
-        assert f"{SHORT}:commit:{'a' * 40}" in targets
+        node_keys = {
+            entry["key"]
+            for _query, params in translate(plan)
+            if "nodes" in params
+            for entry in params["nodes"]
+        }
+        assert f"{SHORT}:commit:{'a' * 40}" in node_keys
 
     def test_merge_never_uses_string_interpolation_for_payload_values(self) -> None:
         """Every value flows as $params. Bracing values into Cypher is
         injection risk plus unfingerprintable debug output."""
         plan = make_plan()
         for query, params in translate(plan):
-            literal = params.get("record_id")
-            if literal is not None and (
-                f'{{record_id: "{literal}"}}' in query or f"{{record_id: '{literal}'}}" in query
-            ):
-                raise AssertionError(f"leaky cypher: {query}")
+            entries = [*params.get("nodes", []), *params.get("relationships", [])]
+            for entry in entries:
+                for value in entry.values():
+                    if not isinstance(value, str):
+                        continue
+                    assert value not in query, f"leaky cypher: {query}"
 
 
 class TestConstraintSweep:
@@ -72,9 +98,18 @@ class TestConstraintSweep:
         plan = make_plan()
         labels = {n.label for n in plan.nodes}
         assert {"PullRequest", "Commit", "CodeRegion", "Person", "Doc"} <= labels
-        from app.graph.neo4j_adapter import constraint_statements
 
         constraints = list(constraint_statements(labels))
         for statement in constraints:
             assert "IF NOT EXISTS" in statement
         assert len(constraints) == len(labels)
+
+    def test_schema_statements_are_constraints_then_indexes(self) -> None:
+        from app.graph.neo4j_adapter import schema_statements
+
+        statements = list(schema_statements(["File", "Symbol"]))
+        assert statements[:2] == list(
+            constraint_statements(["File", "Symbol"])
+        )
+        assert statements[2:] == list(index_statements(["File", "Symbol"]))
+        assert len(statements) == 4

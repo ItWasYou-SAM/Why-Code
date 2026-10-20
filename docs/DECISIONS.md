@@ -519,3 +519,616 @@ per-node/relationship adapter shapes are superseded; the schema statements
 (constraints, indexes, scoped deletes) are unchanged.
 
 **Status.** active
+
+---
+
+## D-0031 — 2026-10-19 — One driver, managed transactions, explicit database
+
+**Decision.** `app/graph/neo4j_driver.py` owns the only `Driver` instance.
+Every statement it sends goes through `Driver.execute_query`, which runs in
+a managed transaction (the driver retries transient failures on its own) and
+receives `database_` explicitly; the connection's default database is never
+relied on. The batched writers depend only on `run(query, **params)`, so they
+remain driver-agnostic and are tested against an in-memory fake.
+
+Schema setup is a one-time, idempotent sweep: `CREATE CONSTRAINT <name> IF
+NOT EXISTS FOR (n:<Label>) REQUIRE n.record_id IS UNIQUE`, then `CREATE INDEX
+… IF NOT EXISTS FOR (n:<Label>) ON (n.repo)`, for every label in the plan
+vocabulary. `build --write` calls it before the first batch so a load cannot
+race its own constraints; a second run is a no-op.
+
+The plan's per-label constraint properties (`file_id`, `symbol_id`,
+`config_id`, `region_id`, `ref_id`, `doc_id`) are the label-specific values
+the project already stores under the canonical `record_id` property (D-0030).
+The graph keeps one identity property rather than duplicating each string
+into a second property and a second unique index; a query that wants
+`f.file_id` reads `f.record_id`. If per-label aliases are ever required for
+external query vocabulary, this decision is the place to revisit.
+
+Batches stay in the recommended 200–500 range (`DEFAULT_BATCH_SIZE = 250`).
+A failure is re-raised as `GraphWriteError`, so the CLI's `AppError` handling
+prints the taxonomy instead of a driver traceback.
+
+Relationship provenance travels as properties (Component 2 writes
+`origin_record_id`). The plan's illustrative `SET r.extracted_at =
+datetime()` is deliberately not used: a server-side timestamp makes replay
+output differ run to run, and this project treats identical re-runs as a
+debugging contract (see the adapter statement-shape tests).
+
+**Status.** active
+
+---
+
+## D-0032 — 2026-10-19 — Validation reports absent evidence as `not_checked`, never as a pass
+
+**Decision.** `validate_graph` runs the Phase 10 acceptance sweep over the
+built records with no database: duplicate IDs, resolved endpoints, symbol
+and region bounds (against `File.line_count`), orphan files,
+`DECLARES`/`USED_BY` config sanity, `IMPORTS` endpoints, high-signal region
+coverage and line-anchored review-comment coverage. It returns a flat report
+with the plan's field names and a `status` of `pass`,
+`pass_with_warnings` or `fail`. The CLI exits non-zero on `fail`, which is
+the hard gate before LLM extraction.
+
+A check that has no input — review-anchor coverage in a structural-only
+graph, region coverage when no high-signal list was supplied, unresolved
+references when no batch was supplied — is recorded in `not_checked` and its
+stat is `null`. It is never reported as `0` (which would read as "checked and
+clean"). The alternative, inferring coverage from absence, is exactly the
+false-comfort failure this phase exists to prevent.
+
+An orphan is a file with no `DEFINES`/`HAS_REGION`/`DOCUMENTED_BY` edge.
+The plan allows explicitly permitted orphans; a config-language file (yaml,
+toml, json, env) that owns at least one `DECLARES` edge is on that
+allowlist, because "declares config keys" is its structural meaning. Orphan
+`Doc` nodes are reported separately as a warning: a doc that documents
+nothing is visible but not fatal.
+
+`unresolved_imports` counts every import that did not resolve to a selected
+file. That deliberately includes third-party/stdlib packages (reported
+separately as `external_imports`) so the headline number matches the plan's
+meaning of "imports that are not internal edges"; `relative_unresolved_imports`
+isolates the imports D-0015 says must never be guessed.
+
+**Status.** active
+
+---
+
+## D-0033 — 2026-10-19 — Decision extraction is a pipeline, never an agent
+
+**Decision.** Turning evidence into engineering decisions is an ordinary,
+deterministic pipeline: candidate detection → context packing → one bounded
+structured call per candidate class → schema validation → evidence
+validation → target resolution → normalisation → de-duplication →
+supersession. The language model is a *proposer* only. It has no tools, no
+memory, and no path to SQLite or Neo4j; it cannot emit a node, an edge, a
+confidence, a status, or a graph key. Every one of those is computed by code
+from evidence that already exists in the ingestion store and the graph
+index.
+
+Extraction is dry-run by default. `python -m app.intent.cli extract` opens no
+connection and writes JSON artifacts (`intent_batch.json`,
+`intent_graph.jsonl`, `review_queue.jsonl`, `extraction_report.json`);
+Neo4j is reached only with `--write`, and the standalone writer requires an
+explicit `--uri` or `--dry-run`. This mirrors D-0011's "failure means zero
+database operations" at the intent layer.
+
+**Status.** active
+
+---
+
+## D-0034 — 2026-10-19 — The model is offered only retrieved evidence IDs
+
+**Decision.** `ContextPacker` renders each artifact with its exact
+`record_id` and packs the whole prompt under a hard token budget. Items that
+do not fit are reported in `omitted_ids`; their IDs are never shown to the
+model. A citation is therefore always traceable to something that was
+actually retrieved, read, and scored — not merely something that exists
+somewhere in the store.
+
+The budget is enforced twice: an incremental guard while packing, and a
+final whole-prompt guard that trims section *text* (never an evidence-ID
+header) and pops whole sections from the end if accounting drifts. The
+`Evidence` headers are what the model cites, so they are never cut.
+
+**Status.** active
+
+---
+
+## D-0035 — 2026-10-19 — Intent identity is computed from the claim and its evidence
+
+**Decision.** A node ID is
+`{prefix}_{short_repo}_{slug(claim)}_{sha256(claim + sorted(evidence_ids))[:10]}`
+(`dec_`, `con_`, `rev_`, `inc_`). A model-supplied `decision_id` is retained
+only as the non-identifying `proposed_id` property. Replaying the same
+proposal over the same accepted evidence yields the same node ID, which is
+what makes dry-run diffs and re-runs reviewable and is the reason a run
+never depends on request order or a server-side timestamp.
+
+**Status.** active
+
+---
+
+## D-0036 — 2026-10-19 — Evidence wrappers, not re-ownership; integrity before the first write
+
+**Decision.** Each cited source record becomes one `Evidence` wrapper node
+(`evi_{short}_{sha256(evidence_id)[:16]}`), and — only when the source node
+already exists in the index — a `REPRESENTS` edge to it. The intent batch
+also carries minimal stubs for pre-existing endpoints so it is
+self-integrity-checkable without pretending to re-own data another component
+already wrote. If a cited source has no node in the graph, the fact is
+recorded in `IntentGraph.skipped`; a wrapper is never silently upgraded into
+a claim about provenance.
+
+`IntentGraph.assert_integrity()` (via the shared
+`GraphRecords.assert_integrity()`) refuses duplicate keys and dangling
+endpoints before any statement is sent. The writer additionally probes
+`MATCH (n {record_id: id})` for every cited source record when
+`verify_evidence` is set, and aborts with `GraphWriteError` before the first
+`MERGE` if any is missing.
+
+**Status.** active
+
+---
+
+## D-0037 — 2026-10-19 — Confidence is categorical, code-computed, and never model-supplied
+
+**Decision.** Confidence is a function of which evidence *types* support a
+claim, so a reader can reproduce it:
+
+- **high** — human discussion (review / review-comment / issue-comment) **and**
+  a commit **and** a changed artifact (file or doc);
+- **medium** — a review body alone, or at least two independent evidence
+  types;
+- **low** — one weak source: a review comment, PR body, commit or file.
+
+A review comment alone can never be high, the plan's explicit ceiling.
+**Amended by D-0042:** Phase 4 treats a single review comment as a *weak*
+source and therefore scores it **low**, not medium. A review body remains
+medium because it is a substantive human statement rather than an inline
+suggestion.
+**Superseded by D-0043 (Phase 5):** the level is now derived from an explicit
+numeric score. A review comment alone is still low, but review-comment +
+commit + diff is **medium** (0.55); *high* requires a merged PR, a commit, a
+diff or doc, and a review comment (0.75 or more).
+
+The scorer's API has no `confidence` parameter, so a model value cannot be
+smuggled in; `confidence_reasons` is stored beside the level so every score
+is explainable.
+
+**Status.** superseded by D-0043.
+
+---
+
+## D-0038 — 2026-10-19 — Supersede only on a shared specific target; otherwise contest; never merge
+
+**Decision.** Ordering is explicit: an earlier PR's decision is the candidate
+for supersession by a later one. A later/earlier pair becomes a candidate only
+when the two intents share a **specific** target — a `Symbol`, `ConfigKey` or
+`CodeRegion`. A shared `File` is not enough, because "both touched this file"
+is not a claim that one decision replaced another (D-0010's region discipline,
+applied to intent).
+
+**Amended by D-0044 (Intent Phase 6):** a candidate is adjudicated by one narrow LLM
+call and can now emit `REVERSES`, `REVISES` or `SUPERSEDES` (later → earlier).
+`unrelated` and `insufficient_evidence` emit no edge. A material conflict over
+a specific target *without* an adjudicated relationship still marks the
+earlier decision `CONTESTED` and records `contested_by`; it never silently
+overwrites it. **Amended by D-0045 (Intent Phase 7):** de-duplication now merges an
+adjudicated duplicate into its earlier canonical node, unioning evidence and
+targets and recording `merged_from`. High-impact merges and conflicts keep
+both nodes (conflicts gain a `CONFLICTS_WITH` edge). Existing decision nodes
+are patched by `StatusUpdate`, never re-emitted. Rejected, low-signal,
+ambiguous, duplicate and contested outputs are written to a JSONL review queue
+with the reason and the truncated raw model text; nothing is dropped.
+
+**Status.** active; amended by D-0044 and D-0045.
+
+---
+
+## D-0039 — 2026-10-19 — Additive signals gate what reaches the model; proposal schemas are strict
+
+**Decision.** A PR is not sent to the model merely because it merged. A
+fixed, explainable set of additive signals decides it:
+
+| signal | weight |
+| --- | --- |
+| merged PR | +2 |
+| multiple review participants | +3 |
+| line-anchored review comment on a changed line | +4 |
+| linked issue | +3 |
+| issue discussion | +3 |
+| PR body states motivation | +2 |
+| commit states a rationale | +2 |
+| high-value subsystem changed | +3 |
+| docs / ADR changed with the code | +4 |
+| reversal language in the title | +4 |
+
+A score at or above the threshold yields a `DECISION_CANDIDATE`;
+docs/config, reversal and incident vocabulary yield `CONSTRAINT`,
+`REVERSAL` and `INCIDENT` candidates independently, so a single PR can
+produce several candidates that are each evidence-linked on their own. A
+reversal therefore cannot smuggle in an unsupported constraint: the
+constraint is extracted and validated separately, or not at all. Detection
+also returns `LOW_SIGNAL` for merged-but-quiet PRs, which are queued for
+review rather than sent to the model.
+
+The LLM-facing schemas (`app/intent/llm/schemas.py`) are strict: `extra`
+is `forbid`, there is no `confidence`, `status`, `supersedes` or graph-key
+field, evidence lists are non-empty and de-duplicated, and target lists are
+capped. A provider that ignores the schema cannot smuggle an unknown field
+through validation.
+
+**Amended by D-0041.** The three per-class schemas are replaced by one
+candidate envelope. `status` is now a classification label; the canonical
+lifecycle and every graph link remain code-computed.
+
+**Status.** active
+
+---
+
+## D-0040 — 2026-10-19 — The evidence pack is region-first, prioritised and category-budgeted
+
+**Decision.** `ContextPacker` builds a small, auditable pack around the
+changed code regions, not around the whole PR. Artifacts enter in this fixed
+order, and a tight budget removes them from the bottom first:
+
+1. the diff hunk for each selected changed region, with the **current** side
+   (context plus additions, new line numbers) and the **previous** side
+   (context plus deletions, old line numbers) reconstructed from the patch;
+2. review comments anchored to that hunk (side-aware: `LEFT` uses the old
+   span);
+3. commit messages — the PR head plus rationale commits, capped, never every
+   commit in a large PR;
+4. the PR title and description;
+5. linked issue titles and a bounded, ranked issue discussion;
+6. docs changed in the same PR;
+7. the copy-only target catalogue.
+
+Hunks are selected because they contain an anchored comment or belong to a
+changed file the candidate already points at. The packer never reads an
+entire file and never includes CI configuration, repository READMEs (unless a
+comment or issue text names the path), or unrelated test files. Only patch
+context is used as "nearby unchanged code"; a missing previous side is stated
+explicitly rather than inferred.
+
+Each category has a weight, floor and ceiling derived from the Phase 2 budget
+table (`app/intent/context/budget.py`). The allocator water-fills the
+available budget, ignores floors when the total is deliberately tiny, and the
+final guard keeps the rendered prompt under the hard ceiling by trimming
+section text and dropping whole sections from the end. Section headers and
+evidence aliases are never cut.
+
+Every included artifact is printed as `[E#] <record_id> — …`. The `E#` label
+is a reading convenience only: `EvidencePack.resolve_citation()` maps it back
+to the exact source `record_id` before `EvidenceValidator` runs, so D-0034's
+"retrieved evidence only" rule still holds. When an issue thread is too large
+to include whole, lower-signal comments are summarised out, the retained
+comments keep their original IDs, and the omitted count is shown.
+
+**Status.** active
+
+---
+
+## D-0041 — 2026-10-20 — Extraction uses one strict candidate schema and code-enforced hard rules
+
+**Decision.** Phase 3 replaces the three per-kind proposal shapes with one
+provider-facing envelope, `CandidateExtraction`
+(`app/intent/llm/schemas.py`):
+
+```json
+{
+  "candidates": [ ... ],
+  "missing_evidence": [ ... ]
+}
+```
+
+Each candidate carries `claim` (≤ 240 characters), `decision_type`
+(`design_decision`, `constraint`, `reversal`, `incident_response`,
+`api_contract`, `operational_policy`), `status` (`accepted`, `rejected`,
+`reversed`, `revised`, `uncertain`), `targets` (`file`, `symbol`,
+`config_key`, `code_region`), at least one `evidence_ids`, `participants`
+(login + role + optional evidence), `rationale` (≤ 800 characters) and a
+`temporal_scope` with a required `valid_from`. Every object sets
+`additionalProperties: false`; unknown fields are refused rather than
+ignored. A normal run makes **one** structured call per selected PR, not one
+per candidate class, and maps each returned `decision_type` to a canonical
+`Decision`, `Constraint` or `Reversal` node.
+
+`status` and `decision_type` are *classification labels*. They do not replace
+the deterministic lifecycle: code still computes active/contested/
+superseded/reversed state, confidence, identity, graph keys and every edge.
+This refines D-0039's "no status" rule: the model may classify, but it still
+may not assert a graph state or a supersession link.
+
+The hard rules are enforced locally because provider schema guarantees are
+not evidence guarantees:
+
+| rule | enforcement |
+| --- | --- |
+| at least one evidence ID per candidate | Pydantic `minItems: 1` |
+| every evidence ID exists in the pack, store and graph | `EvidenceValidator`; aliases resolve first (D-0040) |
+| every target exists in the structural graph or the PR's changed-file set | `GraphLinkValidator`; changed-file records are a documented fallback key |
+| a refactor without a stated rationale is not a decision | `ExtractionRuleValidator` rejects it |
+| a review comment alone is weak evidence | the validator downgrades the candidate to `uncertain` unless another source corroborates it |
+| a merged PR with explicit maintainer rationale can be accepted | accepted classification is preserved; the rationale is part of the evidence |
+| a rejected (unmerged) PR cannot be an active decision | the validator classifies it `rejected`; canonical status becomes `rejected` |
+| a reverted PR must create the reversal and its relationship | extraction must return the reversal candidate; Intent Phase 6 adjudicates the pair and creates `REVERSES`/`REVISES`/`SUPERSEDES` deterministically (D-0044) |
+| the model must not guess | an unsupported response returns `missing_evidence`, which is attached to accepted intents and queued when nothing is accepted |
+
+Rejected candidates, rule violations and unsupported responses go to the
+review queue with the raw model text; nothing is silently dropped. Participant
+*edges* remain deterministic (`ParticipantExtractor`); the model's
+participant classification is preserved on the intent for audit but cannot
+create a relationship on its own.
+
+**Tests.** `tests/intent/test_extraction_rule_gate.py` pins the hard rules;
+`tests/intent/test_schema_validator.py` pins the JSON Schema (required keys,
+enums, limits, `additionalProperties: false`); `test_intent_pipeline.py` pins
+the one-call-per-PR flow, alias resolution, evidence gate and reversal
+relationship end to end.
+
+**Status.** active
+
+---
+
+## D-0042 — 2026-10-20 — Evidence validation is a claim-level, local firewall
+
+**Decision.** Phase 4 adds a second gate after the provider schema. No
+candidate reaches the graph merely because the JSON was valid. Every candidate
+passes through `EvidenceValidator.validate_candidate()` and receives the
+stable result shape:
+
+```json
+{
+  "decision_id": "dec_001",
+  "schema_valid": true,
+  "evidence_valid": true,
+  "targets_valid": true,
+  "unsupported_claims": [],
+  "invalid_evidence_ids": [],
+  "invalid_target_ids": [],
+  "final_status": "accepted_for_graph"
+}
+```
+
+`final_status` is one of `accepted_for_graph`, `observation`, `needs_review`,
+`rejected` or `discarded`. `EvidenceValidationResult` is the public contract;
+`CandidateValidation` carries the evidence, target, grounding, participant and
+confidence detail used by the pipeline.
+
+**Claim-level grounding.** `ClaimGrounder` (`validation/claim_grounding.py`)
+decomposes a claim at sentence, semicolon and contrast boundaries — never
+inside one proposition — and checks every atomic claim against the cited text.
+Support is stemmed content-term coverage, computed locally and reproducibly.
+The claim and its rationale must share content with the evidence, and the
+claim itself must contribute at least one matched term. A term that appears in
+every cited artifact (a module or product name, a shared preamble) is not
+distinctive and cannot be the *only* term linking claim to evidence. Citation
+precision is
+scored per evidence item; an unrelated citation is reported and cannot raise
+confidence. This is a lexical firewall, not an NLI model: it is deliberately
+conservative about rejecting unsupported prose and sends borderline claims to
+human review rather than inventing entailment.
+
+| rule | Phase 4 enforcement |
+| --- | --- |
+| JSON / schema invalid | discarded before any evidence check |
+| no evidence IDs | schema failure (`minItems: 1`) → discarded |
+| evidence ID absent from pack, store or graph | candidate rejected; the whole citation set is discarded |
+| no structural target | candidate rejected |
+| target absent from the graph / changed-file set | all invalid → rejected; partial → `observation` with only resolved targets |
+| claim not supported by cited text | `needs_review` with the atomic claims listed |
+| invented `valid_from` / `valid_until` date | `needs_review`; dates must appear in evidence, and supporting artifacts may not postdate `valid_until` |
+| reversal without a commit or PR | `needs_review`; cross-PR ordering is still computed by `SupersessionDetector` |
+| unsupported participant | participant dropped (no graph edge); optional strict mode rejects the candidate |
+| explicit disagreement in cited discussion | candidate kept, marked `contested`; never silently resolved |
+| one weak evidence source | confidence `low`; review-comment + commit + diff is `medium`, and only a merged PR plus a commit plus a diff/review reaches `high` (D-0043) |
+
+Temporal validity is checked against the packed PR header plus cited evidence,
+so a merge-date `valid_from` is accepted even when the PR record itself was not
+cited. Participant roles must match the cited artifact: author = PR author,
+reviewer = review/review-comment author, commenter = comment author, and
+maintainer/advocate/objector require a cited artifact by that login (advocates
+and objectors also need stance language or a matching review state).
+
+The pipeline records every result in `IntentRunResult.evidence_validations`
+and serialises it under `evidence_validations` in `intent_batch.json`.
+Observations are accepted with canonical status `uncertain` and queued for
+review; conflicts are accepted with status `contested`; unsupported claims,
+invented dates and reversal gaps go to the review queue with a specific
+`ReviewReason` rather than being dropped.
+
+**Tests.** `tests/intent/test_claim_grounding.py` pins atomic decomposition,
+support/relevance, temporal anchoring, reversal and conflict detection;
+`tests/intent/test_evidence_validation_phase4.py` pins the result shape and
+each decision branch; `test_intent_pipeline.py` pins the firewall end to end,
+including observation, conflict, serialization and review routing.
+
+**Status.** active
+
+---
+
+## D-0043 — 2026-10-20 — Confidence is a deterministic score, displayed only as a category
+
+**Decision.** Phase 5 replaces the rule table in `ConfidenceScorer` with an
+explicit numeric score. The model never answers "how confident are you?"; the
+number is computed from the evidence that survived validation:
+
+| evidence kind | record types | points |
+| --- | --- | --- |
+| merged PR | `pull_request` with `merged: true` | 0.20 |
+| commit | `commit` | 0.15 |
+| diff | `changed_file` | 0.20 |
+| review comment | `review_comment`, `review` | 0.20 |
+| issue comment | `issue_comment`, `issue` | 0.10 |
+| doc | `doc_file` | 0.15 |
+
+Each kind contributes at most once. Every additional independent author adds
+`0.03` (capped at three extra authors, so at most `+0.09`). Only evidence that
+supports an atomic claim **and** passes Phase 4 relevance scoring contributes,
+so an irrelevant citation cannot raise confidence. An `uncertain`
+candidate — including a Phase 4 observation downgraded to canonical
+`uncertain` — multiplies the score by `0.6`. The total is capped at `0.98`,
+because lexical evidence cannot prove intent with certainty.
+
+| final score | level | UI label |
+| --- | --- | --- |
+| ≥ 0.75 | `high` | High confidence |
+| ≥ 0.45 | `medium` | Medium confidence |
+| > 0 | `low` | Low confidence |
+| no usable evidence kind | `insufficient` | Insufficient evidence |
+
+The numeric score is stored on `ConfidenceResult` for audit and replay, but it
+is **never displayed**: a percentage such as "87.3% confident" would imply
+statistical certainty the system does not have. `ConfidenceScorer.score()` and
+`display_label()` expose the categorical label; the frontend maps every
+`Confidence` value to one of the four labels above.
+
+A `pull_request` record that is explicitly unmerged earns no merged-PR points.
+An empty or unrecognised evidence set is `insufficient`, not `low`: "no usable
+evidence" is a different statement from "weak evidence".
+
+**Consequences.** Review-comment + commit + diff scores `0.55` and is
+**medium**; high now requires the merged PR as well (`0.75`). This corrects the
+Phase 4 expectation recorded in D-0037/D-0042. The score remains a function of
+evidence only, so a replay produces the same level, score and reasons.
+
+**Tests.** `tests/intent/test_confidence_scorer.py` pins the weights,
+thresholds, author bonus, uncertain discount, cap, insufficient case and
+display labels; `test_evidence_validation_phase4.py` pins the validator's
+medium/high branches; `test_intent_pipeline.py` pins the end-to-end level.
+
+**Status.** active
+
+---
+
+## D-0044 — 2026-10-20 — Intent Phase 6: supersession candidates are deterministic; one LLM call adjudicates them
+
+**Decision.** Phase 6 separates *finding* a possible supersession from
+*deciding* it:
+
+1. `SupersessionDetector.find_candidates()` implements the plan's candidate
+   query in memory: two decisions that `GOVERNS` the same `Symbol`,
+   `ConfigKey` or `CodeRegion`, from different PRs, with the later one ordered
+   by merge date. The later node may be a `Decision` or a `Reversal`.
+2. Deterministic signals are recorded on the candidate: reversal language,
+   config-key removal, same code region, doc change, a review saying the
+   approach failed, and a retained rationale (revision, not reversal).
+3. `SupersessionJudge` asks the model one question over that pair and returns
+   the strict `SupersessionVerdict` schema:
+
+```json
+{
+  "earlier_decision_id": "dec_001",
+  "later_decision_id": "dec_004",
+  "relationship": "reverses",
+  "evidence_ids": ["httpx:commit:..."],
+  "explanation": "The later commit disables the default."
+}
+```
+
+`relationship` is exactly `reverses`, `revises`, `supersedes`, `unrelated` or
+`insufficient_evidence`. The verdict must name the same pair and may cite only
+evidence from the two decisions or their PR bundles; a mismatched pair or an
+invented evidence ID is downgraded to `insufficient_evidence`.
+
+**Edges.** Only three relationship types may be written, and all point from
+the later node to the earlier one:
+
+```text
+(:Decision)-[:REVERSES]->(:Decision)
+(:Decision)-[:REVISES]->(:Decision)
+(:Decision)-[:SUPERSEDES]->(:Decision)
+```
+
+`unrelated` and `insufficient_evidence` create no edge. `insufficient_evidence`
+is queued for human review with `ReviewReason.INSUFFICIENT_EVIDENCE`; nothing
+is guessed. `reverses` sets the earlier decision `reversed`; `revises` and
+`supersedes` set it `superseded`; all three record `superseded_by`. The
+`SUPERSEDED_BY` relationship is no longer written — the pointer survives as a
+node property, while the graph relationship is one of the three above.
+
+A conflicting pair with an `unrelated` (or fallback) verdict still marks the
+earlier decision `contested` under D-0038, without creating an edge. An
+explicit `ReversalIntent` is adjudicated before a later ordinary decision so
+its `REVERSES` edge wins.
+
+**Fallback.** `SupersessionDetector.detect()` accepts a classifier and the
+pipeline always passes the LLM judge. Without a classifier (offline replay or
+unit tests) a conservative deterministic fallback uses the recorded signals;
+it never runs in a normal pipeline run. Provider/schema failure becomes
+`insufficient_evidence`, not an edge.
+
+`IntentRunResult.supersession_decisions` stores every verdict and
+`as_dict()` serialises it beside `supersession_edges` in `intent_batch.json`.
+
+**Tests.** `tests/intent/test_supersession.py` pins candidate discovery, all
+three edges, no-edge verdicts, direction, existing-decision updates and the
+fallback; `test_supersession_judge.py` pins the schema, prompt and evidence
+validation; `test_intent_pipeline.py` pins the end-to-end reversal and verdict
+serialization.
+
+**Status.** active
+
+---
+
+## D-0045 — 2026-10-20 — Intent Phase 7: adjudicated duplicate merges, never silent merges
+
+**Decision.** Duplicate handling is staged and deterministic:
+
+1. **Normalisation.** Claims are lowercased, punctuation is stripped and
+   whitespace is collapsed. An exact normalised match is always a candidate.
+2. **Candidate generation.** Only intents of the same kind, from different
+   PRs, with a shared **specific** target (`Symbol`, `ConfigKey` or
+   `CodeRegion`) are compared. A deterministic hashed n-gram embedding
+   supplies a cosine similarity; it is a candidate generator only. An
+   injectable `EmbeddingModel` can replace it with a semantic model. The
+   default threshold is `0.70` (`WHYCODE_INTENT_DUPLICATE_THRESHOLD`).
+3. **Adjudication.** One bounded LLM call over each candidate returns
+   `merge`, `keep_separate`, `conflicts` or `insufficient_evidence`
+   (`DuplicateVerdict`). The schema requires the pair IDs, at least one
+   evidence ID and an explanation, and forbids extra properties. A verdict
+   naming the wrong pair or citing evidence outside the candidate bundle is
+   downgraded to `insufficient_evidence`.
+4. **Application.** Deterministic code owns the canonical ID, the evidence
+   union and the graph edge.
+
+A merge requires all of: semantically equivalent claims, overlapping
+specific targets, compatible temporal scopes, and evidence that can be
+unioned without contradiction. The earlier intent is canonical. Its
+`evidence_ids`, `targets`, `produced_in` and `missing_evidence` are unioned,
+its `merged_from` records the absorbed IDs, and the duplicate node is not
+written. The audit trail remains in `duplicate_merges` in
+`intent_batch.json`.
+
+Temporal scopes are compatible when they do not end before the other begins;
+an unknown scope is treated as open. An LLM `merge` verdict is downgraded to
+`keep_separate` when the scopes are incompatible.
+
+A conflict never merges. Both nodes survive, receive `CONTESTED` status and a
+later → earlier `CONFLICTS_WITH` edge, and the pair goes to the review queue.
+`insufficient_evidence` also creates no edge and goes to review.
+
+**High-impact merges need a human.** Claims or rationales mentioning security,
+authentication, privacy, data loss, breaking/public API or contract changes,
+migrations, payments/billing, encryption or credentials, and decisions typed
+`api_contract` or `operational_policy`, are not auto-merged. Both nodes stay,
+the later gets `duplicate_of`, and the pair is queued with
+`possible_duplicate`. This is the deliberate exception to "do not create
+duplicate nodes": the human decides the merge.
+
+**Consequences.** This supersedes the "mark `duplicate_of`, never merge" part
+of D-0038. The old `mark_duplicates()` helper remains for callers outside the
+pipeline, but the pipeline uses `Deduplicator.adjudicate()`. Embeddings are
+never proof: without an affirmative `merge` verdict, the two decisions stay
+separate.
+
+**Tests.** `test_deduplication.py` pins normalisation, target overlap,
+same-PR/terminal exclusions, temporal compatibility, evidence union,
+high-impact review and conflict edges; `test_deduplicator_judge.py` pins the
+strict schema, prompt and pair/evidence validation;
+`test_deduplication_pipeline.py` pins the end-to-end merge to one Decision
+node; `test_intent_graph_writer.py` pins the `CONFLICTS_WITH` edge.
+
+**Status.** active

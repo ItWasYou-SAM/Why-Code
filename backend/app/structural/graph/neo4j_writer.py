@@ -11,13 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.core.errors import GraphWriteError
+from app.graph.batch_writer import DEFAULT_BATCH_SIZE, record_statements, write_records
 from app.structural.graph.cypher_templates import (
     STRUCTURAL_LABELS,
-    constraint_statement,
     delete_statement,
-    index_statement,
-    merge_edge_statement,
-    merge_node_statement,
+    schema_statements,
 )
 from app.structural.graph.graph_records import StructuralGraph
 
@@ -37,14 +35,15 @@ class WriteReport:
 
 
 class StructuralGraphWriter:
-    def __init__(self, session: SessionLike, *, batch_size: int = 250) -> None:
+    def __init__(
+        self, session: SessionLike, *, batch_size: int = DEFAULT_BATCH_SIZE
+    ) -> None:
         self.session = session
         self.batch_size = batch_size
 
     def prepare_schema(self) -> None:
-        for label in STRUCTURAL_LABELS:
-            self.session.run(constraint_statement(label))
-            self.session.run(index_statement(label))
+        for statement in schema_statements(STRUCTURAL_LABELS):
+            self.session.run(statement)
 
     def write(self, graph: StructuralGraph, *, repo: str, dry_run: bool = False) -> WriteReport:
         graph.assert_integrity()
@@ -55,19 +54,9 @@ class StructuralGraphWriter:
         if dry_run:
             return report
         try:
-            for node in graph.nodes:
-                self.session.run(
-                    merge_node_statement(node.label),
-                    record_id=node.node_id,
-                    props=node.props,
-                )
-            for edge in graph.edges:
-                self.session.run(
-                    merge_edge_statement(edge.rel_type),
-                    from_id=edge.from_id,
-                    to_id=edge.to_id,
-                    props=edge.props,
-                )
+            write_records(
+                self.session, graph.to_records(), batch_size=self.batch_size
+            )
         except Exception as error:  # noqa: BLE001
             if isinstance(error, GraphWriteError):
                 raise
@@ -87,16 +76,6 @@ class StructuralGraphWriter:
         return self.write(graph, repo=repo)
 
 
-def translate(graph: StructuralGraph) -> Any:
-    """Yield one parameterized statement per node/edge, in deterministic order."""
-    for node in graph.nodes:
-        yield merge_node_statement(node.label), {
-            "record_id": node.node_id,
-            "props": node.props,
-        }
-    for edge in graph.edges:
-        yield merge_edge_statement(edge.rel_type), {
-            "from_id": edge.from_id,
-            "to_id": edge.to_id,
-            "props": edge.props,
-        }
+def translate(graph: StructuralGraph, *, batch_size: int = DEFAULT_BATCH_SIZE) -> Any:
+    """Return grouped, parameterized statements for a structural graph."""
+    return record_statements(graph.to_records(), batch_size=batch_size)

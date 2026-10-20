@@ -29,6 +29,9 @@ class Settings(BaseModel):
     neo4j_password: str = Field(repr=False)
     neo4j_database: str = "neo4j"
     llm_api_key: str = Field(repr=False)
+    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_timeout_seconds: float = 60.0
     artifacts_dir: Path = Path("artifacts")
 
     @classmethod
@@ -51,5 +54,13 @@ class Settings(BaseModel):
             neo4j_password=found["neo4j_password"],
             neo4j_database=source.get("WHYCODE_NEO4J_DATABASE", "neo4j") or "neo4j",
             llm_api_key=found["llm_api_key"],
+            llm_model=source.get("WHYCODE_LLM_MODEL", "gpt-4o-mini") or "gpt-4o-mini",
+            llm_base_url=(
+                source.get("WHYCODE_LLM_BASE_URL", "https://api.openai.com/v1")
+                or "https://api.openai.com/v1"
+            ),
+            llm_timeout_seconds=float(
+                source.get("WHYCODE_LLM_TIMEOUT_SECONDS", "60") or "60"
+            ),
             artifacts_dir=Path(source.get("WHYCODE_ARTIFACTS_DIR", "artifacts")),
         )

@@ -44,19 +44,64 @@ def export_high_signal(
 
 
 def build_report(
-    store: EvidenceStore, *, repo: str, api_calls: int, started_at: str
+    store: EvidenceStore,
+    *,
+    repo: str,
+    api_calls: int,
+    started_at: str,
+    finished_at: str = "",
+    run_id: str = "",
+    selected_prs: int | None = None,
+    processed_prs: int | None = None,
+    failed_prs: int | None = None,
+    high_signal_prs: int = 0,
+    rate_limit_remaining: int | None = None,
+    failures: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Build the run report from the run's result plus DB counts.
+
+    Counts of *this run* come from the caller (a DB-wide count would mix
+    runs). Record counts come from the database, which is what makes the
+    report auditable: every number can be re-queried.
+    """
     states = store.pr_status_counts()
+    processed = states.get("complete", 0) if processed_prs is None else processed_prs
+    failed = states.get("error", 0) if failed_prs is None else failed_prs
+    selected = processed + failed if selected_prs is None else selected_prs
+    failure_rows = list(failures or [])
+
+    if failed and processed:
+        status = "completed_with_failures"
+    elif failed:
+        status = "failed"
+    else:
+        status = "completed"
+
+    by_type = {record_type.value: 0 for record_type in RecordType}
+    by_type.update(store.counts_by_type())
+
     return {
+        "run_id": run_id,
         "repo": repo,
         "started_at": started_at,
+        "finished_at": finished_at,
+        "status": status,
+        "selected_prs": selected,
+        "processed_prs": processed,
+        "failed_prs": failed,
+        "records": by_type,
+        "records_total": store.count_records(),
+        "by_type": dict(by_type),
+        "high_signal_prs": high_signal_prs,
+        "api_requests": api_calls,
         "api_calls": api_calls,
+        "rate_limit_remaining": rate_limit_remaining,
+        "failures": failure_rows,
+        # Legacy keys kept because earlier callers/tests use them.
         "prs_total": sum(states.values()),
         "prs_complete": states.get("complete", 0),
         "prs_errored": states.get("error", 0),
         "prs_pending": states.get("pending", 0),
-        "records_total": store.count_records(),
-        "by_type": store.counts_by_type(),
     }
 
 

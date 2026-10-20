@@ -1,0 +1,162 @@
+[
+  {
+    "record_id": "httpx:pr:1525",
+    "record_type": "pull_request",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "number": 1525,
+      "title": "Revert default retry behaviour",
+      "author": "lovelydinosaur",
+      "merged": true,
+      "merged_at": "2024-06-01T08:00:00Z",
+      "url": "https://github.com/encode/httpx/pull/1525",
+      "body": "This reverts the default retry behaviour. Because retries duplicated writes and caused incidents, retries are now disabled by default and must be opted into.",
+      "labels": [
+        "bugfix"
+      ]
+    },
+    "content_hash": "96d6ad5743eaaee52d67be7f2c8ae575e6ddcec6af772ae40127b13c33ae136c",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:commit:cccccccccccccccccccccccccccccccccccccccc",
+    "record_type": "commit",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "message": "Revert retries by default\n\nBecause duplicate POSTs caused incidents we prevent retries.",
+      "author": "lovelydinosaur",
+      "committed_at": "2024-05-30T10:00:00Z"
+    },
+    "content_hash": "e7a6053dd267d13c1ba8e5fc93188458a8f784b9cf17617983c00b8a033079da",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:pr:1525:file:httpx/_config.py",
+    "record_type": "changed_file",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "path": "httpx/_config.py",
+      "previous_filename": null,
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "patch": "@@ -1,4 +1,4 @@\n class Retries:\n-    default = True\n+    default = False"
+    },
+    "content_hash": "bc6c58dfd1230f6cef13fa014e6ea6576222e95f1ee18f2cec4677571b619c29",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:review:2100",
+    "record_type": "review",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "state": "APPROVED",
+      "author": "tomchristie",
+      "submitted_at": "2024-05-30T11:00:00Z",
+      "body": "LGTM, reverting the default is the right call."
+    },
+    "content_hash": "ead86802836adb00b9cdbf436d5a2e5aec7419e7de557c5314dfdae60ee4eb2b",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:review_comment:300",
+    "record_type": "review_comment",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "path": "httpx/_config.py",
+      "line": 2,
+      "start_line": 1,
+      "side": "RIGHT",
+      "body": "This should be disabled by default because it caused incidents.",
+      "author": "tomchristie",
+      "created_at": "2024-05-30T11:05:00Z",
+      "url": "https://github.com/encode/httpx/pull/1525#discussion_r300",
+      "pull_request_review_id": 2100
+    },
+    "content_hash": "cae1811b9b0003926cef602a760f5cf7adb0da403f758f3145be4d0db1c4d842",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:issue:1300",
+    "record_type": "issue",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "number": 1300,
+      "title": "Default retries caused duplicate POSTs",
+      "state": "closed",
+      "url": "https://github.com/encode/httpx/issues/1300",
+      "author": "sethmlarson",
+      "body": "This regression crashed one of our jobs after a timeout."
+    },
+    "content_hash": "f63bc9d4d226058b126f005f85c86eea20525d2a20f85fa13ee147db0bd1794f",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:issue_comment:9100",
+    "record_type": "issue_comment",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "body": "The failure is a regression from the retry default.",
+      "author": "tomchristie",
+      "created_at": "2024-05-29T12:00:00Z",
+      "url": "https://github.com/encode/httpx/issues/1300#issuecomment-9100",
+      "issue_number": 1300
+    },
+    "content_hash": "008b5c16fb85ee92143690d12450113876fbb082377d0d5a52038f4fe7a91e01",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:doc:docs/advanced/retries.md",
+    "record_type": "doc_file",
+    "repo": "encode/httpx",
+    "pr_number": 1525,
+    "payload": {
+      "path": "docs/advanced/retries.md",
+      "content": "Retries are disabled by default because they can duplicate requests.",
+      "source_sha": "dddddddddddddddddddddddddddddddddddddddd"
+    },
+    "content_hash": "0203aca9f39e948ef312dc7f759dd4de5efc9b35646c0a3fe624c84c443d57e4",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:lovelydinosaur",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "lovelydinosaur"
+    },
+    "content_hash": "7ab7eb6ac5942ddb7e6368d0fe1dda36c26ac2cf90cb079f4f45ee83b17674d0",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:tomchristie",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "tomchristie"
+    },
+    "content_hash": "6944b279cb3e070c5116b4a79896d5a8a7098149c57031dca0029bb939a2df9a",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  },
+  {
+    "record_id": "httpx:person:sethmlarson",
+    "record_type": "person",
+    "repo": "encode/httpx",
+    "pr_number": null,
+    "payload": {
+      "login": "sethmlarson"
+    },
+    "content_hash": "bc8090348aa8bd616dd5590b64344802ebd55486b0fad3278c312cc3ae609abc",
+    "ingested_at": "2026-10-19T10:00:00+00:00"
+  }
+]

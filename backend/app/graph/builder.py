@@ -15,11 +15,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.core.errors import GraphWriteError, InvalidRecordError
+from app.graph.batch_writer import DEFAULT_BATCH_SIZE, write_records
 from app.graph.neo4j_adapter import (
-    constraint_statements,
     delete_nodes,
-    index_statements,
-    translate,
+    schema_statements,
 )
 from app.graph.ops import LABEL_BY_TYPE, GraphPlan
 
@@ -48,32 +47,55 @@ class BuildReport:
 
 
 class GraphBuilder:
-    def __init__(self, session: SessionLike, batch_size: int = 250) -> None:
+    def __init__(self, session: SessionLike, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.session = session
         self.batch_size = batch_size
 
     # -- schema ---------------------------------------------------------
     def prepare_schema(self) -> None:
         labels = list(dict.fromkeys(LABEL_BY_TYPE.values()))
-        labels.append("Repo")
-        for statement in constraint_statements(labels):
-            self.session.run(statement)
-        for statement in index_statements(labels):
+        labels.extend(["Repo", "CodeRegion"])
+        for statement in schema_statements(labels):
             self.session.run(statement)
 
     # -- loading --------------------------------------------------------
     def load_jsonl_text(
-        self, text: str, repo: str, dry_run: bool = False
+        self,
+        text: str,
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
-        return self.load_records(_parse_jsonl(text), repo=repo, dry_run=dry_run)
+        return self.load_records(
+            _parse_jsonl(text),
+            repo=repo,
+            dry_run=dry_run,
+            high_signal_pr_numbers=high_signal_pr_numbers,
+        )
 
     def load_jsonl_file(
-        self, path: str | Path, repo: str, dry_run: bool = False
+        self,
+        path: str | Path,
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
-        return self.load_jsonl_text(Path(path).read_text(encoding="utf-8"), repo, dry_run)
+        return self.load_jsonl_text(
+            Path(path).read_text(encoding="utf-8"),
+            repo,
+            dry_run,
+            high_signal_pr_numbers=high_signal_pr_numbers,
+        )
 
     def load_records(
-        self, records: Iterable[dict[str, Any]], repo: str, dry_run: bool = False
+        self,
+        records: Iterable[dict[str, Any]],
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
         materialized = list(records)
         for record in materialized:
@@ -83,7 +105,9 @@ class GraphBuilder:
                     component="graph",
                     record_id=record.get("record_id"),
                 )
-        plan = GraphPlan.from_records(materialized)
+        plan = GraphPlan.from_records(
+            materialized, high_signal_pr_numbers=high_signal_pr_numbers
+        )
         report = self._report(plan, repo=repo, dry_run=dry_run)
         if dry_run:
             return report
@@ -91,23 +115,48 @@ class GraphBuilder:
         return report
 
     def rebuild_jsonl_text(
-        self, text: str, repo: str, dry_run: bool = False
+        self,
+        text: str,
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
-        return self.rebuild_records(_parse_jsonl(text), repo=repo, dry_run=dry_run)
+        return self.rebuild_records(
+            _parse_jsonl(text),
+            repo=repo,
+            dry_run=dry_run,
+            high_signal_pr_numbers=high_signal_pr_numbers,
+        )
 
     def rebuild_jsonl_file(
-        self, path: str | Path, repo: str, dry_run: bool = False
+        self,
+        path: str | Path,
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
         return self.rebuild_jsonl_text(
-            Path(path).read_text(encoding="utf-8"), repo, dry_run
+            Path(path).read_text(encoding="utf-8"),
+            repo,
+            dry_run,
+            high_signal_pr_numbers=high_signal_pr_numbers,
         )
 
     def rebuild_records(
-        self, records: Iterable[dict[str, Any]], repo: str, dry_run: bool = False
+        self,
+        records: Iterable[dict[str, Any]],
+        repo: str,
+        dry_run: bool = False,
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
     ) -> BuildReport:
         # Validate first: a bad corpus must not wipe an existing graph.
         materialized = list(records)
-        plan = GraphPlan.from_records(materialized)
+        plan = GraphPlan.from_records(
+            materialized, high_signal_pr_numbers=high_signal_pr_numbers
+        )
         report = self._report(plan, repo=repo, dry_run=dry_run)
         if dry_run:
             return report
@@ -124,8 +173,9 @@ class GraphBuilder:
 
     def _execute(self, plan: GraphPlan) -> None:
         try:
-            for query, params in translate(plan):
-                self.session.run(query, **params)
+            write_records(
+                self.session, plan.to_records(), batch_size=self.batch_size
+            )
         except Exception as error:  # noqa: BLE001 - re-raised with taxonomy
             if isinstance(error, GraphWriteError):
                 raise

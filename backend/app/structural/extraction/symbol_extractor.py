@@ -21,6 +21,11 @@ from app.structural.languages.python_parser import run_query
 
 _CONSTANT_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+# Type aliases are named like types, not like constants. ``URL = str`` stays a
+# constant (it is SCREAMING_CASE); ``UserId = int`` and ``HTTPStatus = ...``
+# are aliases. Lowercase assignments are ordinary variables and are skipped.
+_TYPE_ALIAS_NAME = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
+
 # ``@x.setter`` / ``@x.getter`` / ``@x.deleter`` define a *second* symbol
 # with the same bare name as the property. The decorator is explicit, so we
 # record the role rather than letting two definitions collide on one ID.
@@ -30,6 +35,19 @@ _DEFINITION_KINDS = {
     "definition.function": SymbolKind.FUNCTION,
     "definition.class": SymbolKind.CLASS,
     "definition.constant": SymbolKind.CONSTANT,
+    "definition.type": SymbolKind.TYPE,
+}
+
+# A simple alias is a name bound directly to a type expression. Calls,
+# lambdas and arbitrary expressions are not aliases, and comprehensions are
+# never definitions.
+_TYPE_EXPRESSION_NODES = {
+    "identifier",
+    "attribute",
+    "subscript",
+    "tuple",
+    "list",
+    "parenthesized_expression",
 }
 
 
@@ -85,6 +103,54 @@ def _decorators(declaration: Any, source: bytes) -> list[str]:
     ]
 
 
+def _is_local(node: Any) -> bool:
+    """True when the node sits inside a function or lambda body.
+
+    Constants and aliases are only extracted from module and class scope.
+    Local assignments are implementation detail, not graph structure.
+    """
+    ancestor = node.parent
+    while ancestor is not None:
+        if ancestor.type in {"function_definition", "lambda"}:
+            return True
+        ancestor = ancestor.parent
+    return False
+
+
+def _is_type_factory_call(value_node: Any, source: bytes) -> bool:
+    """Type variables are not constants and are not simple aliases."""
+    if value_node is None or value_node.type != "call":
+        return False
+    function = value_node.child_by_field_name("function")
+    if function is None:
+        return False
+    return _text(function, source) in {
+        "TypeVar",
+        "ParamSpec",
+        "TypeVarTuple",
+        "NewType",
+    }
+
+
+def _is_simple_type_alias(name: str, value_node: Any, source: bytes) -> bool:
+    """Whether an assignment binds a name to a type expression."""
+    if (
+        value_node is None
+        or _CONSTANT_NAME.match(name)
+        or not _TYPE_ALIAS_NAME.match(name)
+    ):
+        return False
+    node_type = value_node.type
+    if node_type == "binary_operator":
+        # PEP 604 unions: ``int | None``. Reject other binary expressions
+        # because ``Flags = A | B`` is not provably a type alias.
+        return "|" in _text(value_node, source)
+    if node_type == "string":
+        inner = _text(value_node, source).strip("'\"").strip()
+        return bool(_TYPE_ALIAS_NAME.match(inner.rsplit(".", 1)[-1]))
+    return node_type in _TYPE_EXPRESSION_NODES
+
+
 def _collect_definitions(tree: Any, source: bytes) -> list[_Definition]:
     found: dict[int, _Definition] = {}
     for _pattern, captures in run_query("python_definitions.scm", tree.root_node):
@@ -92,13 +158,24 @@ def _collect_definitions(tree: Any, source: bytes) -> list[_Definition]:
         if name_node is None:
             continue
         name = _text(name_node, source)
+        value_node = _first(captures, "value")
         for key, kind in _DEFINITION_KINDS.items():
             node = _first(captures, key)
             if node is None or node.id in found:
                 continue
-            # Only SCREAMING_CASE assignments are constants; every other
-            # assignment is ordinary code.
-            if kind is SymbolKind.CONSTANT and not _CONSTANT_NAME.match(name):
+            if kind is SymbolKind.CONSTANT:
+                if _is_local(node):
+                    continue
+                # A lambda is an expression, never a named definition.
+                if value_node is not None and value_node.type == "lambda":
+                    continue
+                if _is_type_factory_call(value_node, source):
+                    continue
+                if _is_simple_type_alias(name, value_node, source):
+                    kind = SymbolKind.TYPE
+                elif not _CONSTANT_NAME.match(name):
+                    continue
+            elif kind is SymbolKind.TYPE and _is_local(node):
                 continue
             parent = node.parent
             declaration = (

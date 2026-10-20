@@ -27,6 +27,7 @@ from app.domain.evidence_ids import (
     review_id,
 )
 from app.domain.record_types import RecordType
+from app.graph.records import GraphNode, GraphRecords, GraphRelationship
 
 LABEL_BY_TYPE: dict[str, str] = {
     RecordType.PULL_REQUEST.value: "PullRequest",
@@ -62,10 +63,40 @@ class GraphPlan:
     rels: list[RelOp] = field(default_factory=list)
 
     @classmethod
-    def from_records(cls, records: Iterable[dict[str, Any]]) -> GraphPlan:
+    def from_records(
+        cls,
+        records: Iterable[dict[str, Any]],
+        *,
+        high_signal_pr_numbers: set[int] | None = None,
+    ) -> GraphPlan:
         from app.graph.mapping import ops_from_records
 
-        return ops_from_records(records)
+        return ops_from_records(
+            records, high_signal_pr_numbers=high_signal_pr_numbers
+        )
+
+    def to_records(self) -> GraphRecords:
+        """The plan as transport-neutral records.
+
+        Integrity is asserted here so a writer can never receive a batch with
+        a dangling endpoint, whether it came from a plan or from extraction.
+        """
+        self.assert_integrity()
+        return GraphRecords(
+            nodes=[
+                GraphNode(label=node.label, key=node.record_id, properties=node.props)
+                for node in self.nodes
+            ],
+            relationships=[
+                GraphRelationship(
+                    rel_type=rel.rel_type,
+                    start_key=rel.from_record_id,
+                    end_key=rel.to_record_id,
+                    properties=rel.props,
+                )
+                for rel in self.rels
+            ],
+        )
 
     def node(self, record_id: str) -> NodeOp | None:
         for node in self.nodes:

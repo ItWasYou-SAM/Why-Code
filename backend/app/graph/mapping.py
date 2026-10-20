@@ -6,16 +6,22 @@ only when the container node exists in the same corpus, so a partial
 corpus (a single file in a unit test) does not manufacture dangling edges.
 Explicit references — an issue number, a review-comment path — must
 resolve; if they do not, the corpus is refused (D-0011).
+
+Code regions are read from evidence only: one per unified-diff hunk and one
+per review-comment anchor. A hunk region is commit-scoped and linked to the
+PR's latest known commit; no hunk-to-symbol mapping is inferred here.
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from typing import Any
 
 from app.core.errors import InvalidRecordError
 from app.domain.evidence_ids import (
     code_region_id,
+    commit_id,
     person_id,
     pull_request_id,
     repo_id,
@@ -27,6 +33,9 @@ from app.domain.evidence_ids import (
     review_id as make_review_id,
 )
 from app.graph.ops import LABEL_BY_TYPE, GraphPlan, NodeOp, RelOp, _node
+from app.graph.regions import parse_patch_hunks
+from app.structural.extraction.ids import file_id as structural_file_id
+from app.structural.extraction.ids import region_id as structural_region_id
 
 _KNOWN_TYPES = set(LABEL_BY_TYPE)
 
@@ -57,6 +66,19 @@ def _author(payload: dict[str, Any]) -> str | None:
     return author if isinstance(author, str) and author.strip() else None
 
 
+def _region_content_hash(record: dict[str, Any], fallback: str) -> str:
+    """Stable content hash for a region's evidence.
+
+    The changed-file record already carries a hash of the normalized patch
+    payload. When a caller supplies a bare record without one, hash the
+    fallback text so the region still has a verifiable content identity.
+    """
+    value = record.get("content_hash")
+    if isinstance(value, str) and value.strip():
+        return value
+    return hashlib.sha256(fallback.encode("utf-8")).hexdigest()
+
+
 def _region_anchor(payload: dict[str, Any]) -> tuple[int, int] | None:
     raw_line = payload.get("line")
     raw_start = payload.get("start_line")
@@ -73,7 +95,11 @@ def _region_anchor(payload: dict[str, Any]) -> tuple[int, int] | None:
     return start_line, end_line
 
 
-def ops_from_records(records: Iterable[dict[str, Any]]) -> GraphPlan:
+def ops_from_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    high_signal_pr_numbers: set[int] | None = None,
+) -> GraphPlan:
     materialized = list(records)
     plan = GraphPlan()
 
@@ -139,11 +165,44 @@ def ops_from_records(records: Iterable[dict[str, Any]]) -> GraphPlan:
     docs = by_type.get("Doc", [])
 
     pr_ids = {pr["record_id"] for pr in prs}
-    file_by_pr_path = {
-        (file.get("pr_number"), _payload(file).get("path")): file["record_id"]
-        for file in files
-    }
     issue_ids = {issue["record_id"] for issue in issues}
+
+    file_record_by_pr_path = {
+        (file.get("pr_number"), _payload(file).get("path")): file for file in files
+    }
+
+    # A changed file carries no commit SHA, so a region can only be tied to
+    # the PR's latest known commit. This is the same rule Component 3 uses
+    # to choose the file version; it is a version anchor, not a claim about
+    # which individual commit introduced a hunk.
+    latest_commit: dict[int, tuple[str, str]] = {}
+    for commit in commits:
+        pr_number = commit.get("pr_number")
+        payload = _payload(commit)
+        sha = payload.get("sha")
+        if not isinstance(pr_number, int) or not isinstance(sha, str) or not sha:
+            continue
+        when = str(payload.get("committed_at") or "")
+        current = latest_commit.get(pr_number)
+        if current is None or when >= current[0]:
+            latest_commit[pr_number] = (when, sha)
+    commit_sha_by_pr = {
+        pr_number: sha for pr_number, (_, sha) in latest_commit.items()
+    }
+    commit_node_by_pr = {
+        pr_number: commit_id(repo=repo, sha=sha)
+        for pr_number, sha in commit_sha_by_pr.items()
+    }
+    commit_ids = {commit["record_id"] for commit in commits}
+
+    region_ids: set[str] = set()
+
+    def add_region(region_id: str, props: dict[str, Any]) -> bool:
+        if region_id in region_ids:
+            return False
+        region_ids.add(region_id)
+        plan.nodes.append(_node("CodeRegion", region_id, props, repo))
+        return True
 
     # Repo owns every PR.
     for pr in prs:
@@ -200,7 +259,70 @@ def ops_from_records(records: Iterable[dict[str, Any]]) -> GraphPlan:
         if target is not None:
             rel("HAS_COMMENT", target, comment["record_id"], comment["record_id"])
 
-    # Code regions come only from review-comment anchors (D-0010).
+    # Code regions come from three explicit sources: changed hunks, review
+    # comment anchors, and (in Component 3) symbol definitions. A hunk region
+    # uses the commit-scoped identity so the structural pass can attach the
+    # symbols that contain those lines.
+    for file_record in files:
+        pr_number = file_record.get("pr_number")
+        if high_signal_pr_numbers is not None and pr_number not in high_signal_pr_numbers:
+            continue
+        if not isinstance(pr_number, int):
+            continue
+        payload = _payload(file_record)
+        path = payload.get("path")
+        patch = payload.get("patch")
+        if not isinstance(path, str) or not path:
+            continue
+        commit_sha = commit_sha_by_pr.get(pr_number)
+        commit_node = commit_node_by_pr.get(pr_number)
+        if commit_sha is None or commit_node is None or commit_node not in commit_ids:
+            # Without a commit there is no honest CHANGED_IN edge and no
+            # version-scoped file identity. Skip the hunk rather than invent
+            # one.
+            continue
+        version_file_id = structural_file_id(
+            repo=repo, path=path, commit_sha=commit_sha
+        )
+        for hunk in parse_patch_hunks(patch if isinstance(patch, str) else None):
+            region = structural_region_id(
+                repo=repo,
+                path=path,
+                commit_sha=commit_sha,
+                start_line=hunk.start_line,
+                end_line=hunk.end_line,
+            )
+            add_region(
+                region,
+                {
+                    "path": path,
+                    "commit_sha": commit_sha,
+                    "file_id": version_file_id,
+                    "start_line": hunk.start_line,
+                    "end_line": hunk.end_line,
+                    "line": hunk.end_line,
+                    "side": "RIGHT",
+                    "source": "changed_hunk",
+                    "source_pr_number": pr_number,
+                    "content_hash": _region_content_hash(
+                        file_record, hunk.header
+                    ),
+                    "hunk_header": hunk.header,
+                },
+            )
+            rel(
+                "HAS_REGION",
+                file_record["record_id"],
+                region,
+                file_record["record_id"],
+            )
+            rel(
+                "CHANGED_IN",
+                region,
+                commit_node,
+                file_record["record_id"],
+            )
+
     for comment in review_comments:
         payload = _payload(comment)
         path = payload.get("path")
@@ -208,32 +330,52 @@ def ops_from_records(records: Iterable[dict[str, Any]]) -> GraphPlan:
         if not path or anchor is None:
             continue
         start_line, end_line = anchor
-        file_id = file_by_pr_path.get((comment.get("pr_number"), path))
-        if file_id is None:
+        pr_number = comment.get("pr_number")
+        comment_file_record = file_record_by_pr_path.get((pr_number, path))
+        if comment_file_record is None:
             raise InvalidRecordError(
                 f"review comment anchors {path!r} but no changed file with that path "
                 f"exists for the PR",
                 component="graph",
                 record_id=comment["record_id"],
             )
+        changed_file_id = comment_file_record["record_id"]
         region = code_region_id(
             repo=repo, path=str(path), start_line=start_line, line=end_line
         )
-        plan.nodes.append(
-            _node(
-                "CodeRegion",
-                region,
-                {
-                    "path": path,
-                    "start_line": start_line,
-                    "line": end_line,
-                    "side": payload.get("side"),
-                },
-                repo,
-            )
+        commit_sha = (
+            commit_sha_by_pr.get(pr_number) if isinstance(pr_number, int) else None
         )
-        rel("HAS_REGION", file_id, region, comment["record_id"])
+        add_region(
+            region,
+            {
+                "path": path,
+                "commit_sha": commit_sha,
+                "file_id": (
+                    structural_file_id(
+                        repo=repo, path=str(path), commit_sha=commit_sha
+                    )
+                    if commit_sha
+                    else None
+                ),
+                "start_line": start_line,
+                "end_line": end_line,
+                "line": end_line,
+                "side": payload.get("side"),
+                "source": "review_comment",
+                "source_pr_number": pr_number,
+                "content_hash": _region_content_hash(
+                    comment_file_record, str(payload.get("body") or "")
+                ),
+            },
+        )
+        rel("HAS_REGION", changed_file_id, region, comment["record_id"])
         rel("COMMENTS_ON", comment["record_id"], region, comment["record_id"])
+        commit_node = (
+            commit_node_by_pr.get(pr_number) if isinstance(pr_number, int) else None
+        )
+        if commit_node is not None and commit_node in commit_ids:
+            rel("CHANGED_IN", region, commit_node, comment["record_id"])
 
     # Issues discussed by a PR.
     for issue in issues:

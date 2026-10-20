@@ -100,3 +100,63 @@ class TestAcceptanceOnRealNeo4j:
                 rid=f"{SHORT}:pr:{DEEP}",
                 repo="encode/httpx",
             )
+
+
+@pytest.fixture()
+def neo4j_client():
+    from neo4j import GraphDatabase
+
+    from app.graph.neo4j_driver import Neo4jClient
+
+    driver = GraphDatabase.driver(
+        os.environ["WHYCODE_TEST_NEO4J_URI"],
+        auth=(
+            os.environ.get("WHYCODE_TEST_NEO4J_USER", "neo4j"),
+            os.environ["WHYCODE_TEST_NEO4J_PASSWORD"],
+        ),
+    )
+    client = Neo4jClient(
+        driver, database=os.environ.get("WHYCODE_TEST_NEO4J_DATABASE", "neo4j")
+    )
+    yield client
+    driver.close()
+
+
+class TestBatchedWriterOnRealNeo4j:
+    """The Phase 9 path: driver.execute_query + UNWIND batches."""
+
+    def test_batched_records_round_trip(self, neo4j_client) -> None:
+        from app.graph.batch_writer import write_records
+        from app.graph.records import GraphNode, GraphRecords, GraphRelationship
+
+        repo = "encode/httpx-phase9-inttest"
+        neo4j_client.run("MATCH (n {repo: $repo}) DETACH DELETE n", repo=repo)
+        records = GraphRecords(
+            nodes=[
+                GraphNode(
+                    label="Phase9File",
+                    key=f"{repo}:file:a",
+                    properties={"repo": repo, "path": "a.py"},
+                ),
+                GraphNode(
+                    label="Phase9Symbol",
+                    key=f"{repo}:symbol:s",
+                    properties={"repo": repo, "name": "s"},
+                ),
+            ],
+            relationships=[
+                GraphRelationship(
+                    rel_type="DEFINES",
+                    start_key=f"{repo}:file:a",
+                    end_key=f"{repo}:symbol:s",
+                )
+            ],
+        )
+        assert write_records(neo4j_client, records) == 3
+        result = neo4j_client.run(
+            "MATCH (:Phase9File {repo: $repo})-[:DEFINES]->(:Phase9Symbol) "
+            "RETURN count(*) AS c",
+            repo=repo,
+        ).single()
+        assert result is not None and result["c"] == 1
+        neo4j_client.run("MATCH (n {repo: $repo}) DETACH DELETE n", repo=repo)

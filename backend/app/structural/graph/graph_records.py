@@ -1,8 +1,10 @@
 """Structural graph records.
 
 The structural half of the graph is built as an explicit list of nodes and
-relationships before any Cypher runs. Every relationship is created from a
-fact present in a ``StructuralFile``; there is no inference step here.
+relationships before any Cypher runs. Extraction emits the shared
+``GraphNode``/``GraphRelationship`` records; the writer batches them. Every
+relationship is created from a fact present in a ``StructuralFile``; there
+is no inference step here.
 
 Identity rules (all path@commit scoped):
 
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.errors import InvalidRecordError
+from app.graph.records import GraphNode, GraphRecords, GraphRelationship
 from app.structural.extraction.ids import (
     config_key_id,
     doc_node_id,
@@ -31,30 +34,19 @@ from app.structural.extraction.ids import (
 )
 from app.structural.extraction.models import DocMention, StructuralBatch, StructuralFile
 
-
-@dataclass(frozen=True)
-class GraphNode:
-    label: str
-    node_id: str
-    props: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class GraphEdge:
-    rel_type: str
-    from_id: str
-    to_id: str
-    props: dict[str, Any] = field(default_factory=dict)
+# The Component 3 vocabulary now aliases the shared record models. The
+# ``GraphEdge`` name stays until every structural call site migrates.
+GraphEdge = GraphRelationship
 
 
 @dataclass
 class StructuralGraph:
     nodes: list[GraphNode] = field(default_factory=list)
-    edges: list[GraphEdge] = field(default_factory=list)
+    edges: list[GraphRelationship] = field(default_factory=list)
     skipped: list[dict[str, str]] = field(default_factory=list)
 
     def node_ids(self) -> set[str]:
-        return {node.node_id for node in self.nodes}
+        return {node.key for node in self.nodes}
 
     def counts(self) -> dict[str, dict[str, int]]:
         nodes: dict[str, int] = {}
@@ -65,10 +57,14 @@ class StructuralGraph:
             edges[edge.rel_type] = edges.get(edge.rel_type, 0) + 1
         return {"nodes": nodes, "edges": edges}
 
+    def to_records(self) -> GraphRecords:
+        """The structural graph as the shared, transport-neutral batch."""
+        return GraphRecords(nodes=list(self.nodes), relationships=list(self.edges))
+
     def assert_integrity(self) -> None:
         known = self.node_ids()
         for edge in self.edges:
-            for endpoint in (edge.from_id, edge.to_id):
+            for endpoint in (edge.start_key, edge.end_key):
                 if endpoint not in known:
                     raise InvalidRecordError(
                         f"{edge.rel_type} references missing structural node {endpoint}",
@@ -81,6 +77,10 @@ def build_structural_graph(batch: StructuralBatch) -> StructuralGraph:
     builder = _Builder(batch.repo)
     for entry in batch.files:
         builder.register_file(entry)
+    # A Python file may precede the config file that declares the key it
+    # reads. Index declarations before any USED_BY edge is considered.
+    for entry in batch.files:
+        builder.register_declared_keys(entry)
     for entry in batch.files:
         builder.add_file_facts(entry)
     builder.add_docs(batch.docs)
@@ -118,6 +118,12 @@ class _Builder:
         )
         self._files_by_path.setdefault(entry.path, []).append(fid)
 
+    def register_declared_keys(self, entry: StructuralFile) -> None:
+        for key in entry.config_keys:
+            self._declared_keys[key.key] = config_key_id(
+                repo=self.repo, source=entry.path, key=key.key
+            )
+
     # -- pass 2: facts ---------------------------------------------------
     def add_file_facts(self, entry: StructuralFile) -> None:
         fid = entry.file_id
@@ -129,6 +135,7 @@ class _Builder:
                 {
                     "name": symbol.name,
                     "qualname": symbol.qualname,
+                    "qualified_name": symbol.qualified_name,
                     "kind": symbol.kind.value,
                     "path": symbol.path,
                     "commit_sha": symbol.commit_sha,
@@ -151,9 +158,12 @@ class _Builder:
                 {
                     "path": region.path,
                     "commit_sha": region.commit_sha,
+                    "file_id": fid,
                     "start_line": region.start_line,
                     "end_line": region.end_line,
                     "kind": region.kind,
+                    "source": "definition",
+                    "content_hash": entry.content_hash,
                 },
             )
             self._edge("HAS_REGION", fid, region.region_id)
@@ -183,7 +193,15 @@ class _Builder:
 
         for external in entry.external_refs:
             eid = external_ref_id(repo=self.repo, module=external.module)
-            self._node("ExternalRef", eid, {"module": external.module})
+            self._node(
+                "ExternalRef",
+                eid,
+                {
+                    "module": external.module,
+                    "kind": external.kind,
+                    "name": external.name or external.module,
+                },
+            )
             self._edge("IMPORTS", fid, eid)
 
         for resolved in entry.references:
@@ -217,6 +235,8 @@ class _Builder:
                     "source_path": key.source_path,
                     "source_kind": key.source_kind.value,
                     "line": key.line,
+                    "value": key.value,
+                    "value_type": key.value_type,
                     "value_preview": key.value_preview,
                 },
             )
@@ -226,6 +246,10 @@ class _Builder:
         for reference in entry.config_references:
             existing = self._declared_keys.get(reference.key)
             if existing is None:
+                if reference.kind != "environment":
+                    # A dotted access to a key nobody declares is an
+                    # uncertain connection, not an environment variable.
+                    continue
                 kid = config_key_id(
                     repo=self.repo, source="environment", key=reference.key
                 )
@@ -237,6 +261,8 @@ class _Builder:
                         "source_path": None,
                         "source_kind": reference.source_kind.value,
                         "line": None,
+                        "value": None,
+                        "value_type": None,
                         "value_preview": None,
                     },
                 )
@@ -281,21 +307,24 @@ class _Builder:
 
     # -- helpers --------------------------------------------------------
     def _node(self, label: str, node_id: str, props: dict[str, Any]) -> None:
-        if any(node.node_id == node_id for node in self.graph.nodes):
+        if any(node.key == node_id for node in self.graph.nodes):
             return
         self.graph.nodes.append(
             GraphNode(
                 label=label,
-                node_id=node_id,
-                props={**props, "record_id": node_id, "repo": self.repo},
+                key=node_id,
+                properties={**props, "record_id": node_id, "repo": self.repo},
             )
         )
 
     def _edge(
         self, rel_type: str, from_id: str, to_id: str, props: dict[str, Any] | None = None
     ) -> None:
-        candidate = GraphEdge(
-            rel_type=rel_type, from_id=from_id, to_id=to_id, props=props or {}
+        candidate = GraphRelationship(
+            rel_type=rel_type,
+            start_key=from_id,
+            end_key=to_id,
+            properties=props or {},
         )
         if candidate not in self.graph.edges:
             self.graph.edges.append(candidate)
@@ -304,6 +333,8 @@ class _Builder:
 __all__ = [
     "GraphEdge",
     "GraphNode",
+    "GraphRecords",
+    "GraphRelationship",
     "StructuralGraph",
     "build_structural_graph",
     "file_id",

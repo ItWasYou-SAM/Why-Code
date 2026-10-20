@@ -62,6 +62,15 @@ class TestGraphRecords:
         assert any(edge.from_id.startswith("httpx:symbol:") for edge in edges)
         assert any(edge.from_id.startswith("httpx:file:") for edge in edges)
 
+    def test_definition_regions_carry_source_file_and_hash(self) -> None:
+        nodes = {node.node_id: node for node in graph().nodes}
+        region = next(
+            node for node in nodes.values() if node.label == "CodeRegion"
+        )
+        assert region.props["source"] == "definition"
+        assert region.props["file_id"].startswith("httpx:file:")
+        assert region.props["content_hash"]
+
     def test_file_imports_resolvable_file(self) -> None:
         edges = [
             edge
@@ -96,6 +105,19 @@ class TestGraphRecords:
     def test_counts_are_stable_across_builds(self) -> None:
         assert graph().counts() == graph().counts()
 
+    def test_graph_is_made_of_shared_records(self) -> None:
+        from app.graph.records import GraphNode, GraphRecords, GraphRelationship
+
+        structural = graph()
+        assert all(isinstance(node, GraphNode) for node in structural.nodes)
+        assert all(isinstance(edge, GraphRelationship) for edge in structural.edges)
+        records = structural.to_records()
+        assert isinstance(records, GraphRecords)
+        assert records.counts() == {
+            "nodes": structural.counts()["nodes"],
+            "rels": structural.counts()["edges"],
+        }
+
 
 class TestWriter:
     def test_dry_run_performs_zero_writes(self) -> None:
@@ -111,12 +133,20 @@ class TestWriter:
         writer.write(graph(), repo=REPO)
         assert session.executed > 0
         for query, _params in session.calls:
-            assert "$record_id" in query or "$from_id" in query
+            assert "$nodes" in query or "$relationships" in query
             assert "httpx:" not in query
 
-    def test_one_statement_per_node_and_edge(self) -> None:
+    def test_write_batches_by_label_and_relationship(self) -> None:
         structural = graph()
-        statements = list(translate(structural))
+        statements = translate(structural)
+        nodes_by_label = {node.label for node in structural.nodes}
+        rels_by_type = {edge.rel_type for edge in structural.edges}
+        assert len(statements) == len(nodes_by_label) + len(rels_by_type)
+        assert len(statements) < len(structural.nodes) + len(structural.edges)
+
+    def test_write_batch_size_splits_statements(self) -> None:
+        structural = graph()
+        statements = translate(structural, batch_size=1)
         assert len(statements) == len(structural.nodes) + len(structural.edges)
 
     def test_validation_failure_blocks_writes(self) -> None:

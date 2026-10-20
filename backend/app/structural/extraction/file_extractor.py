@@ -22,6 +22,7 @@ from app.structural.extraction.models import (
     ConfigReference,
     DocMention,
     ExternalRef,
+    ImportKind,
     Language,
     StructuralFile,
 )
@@ -118,6 +119,10 @@ def _external_refs(imports: list[Any], *, path: str) -> list[ExternalRef]:
     for imported in imports:
         if imported.resolved_path is not None:
             continue
+        if imported.kind is ImportKind.RELATIVE:
+            # A relative import outside the selected set is unresolved, not a
+            # third-party package.
+            continue
         module = imported.module or ""
         if not module:
             continue
@@ -127,7 +132,7 @@ def _external_refs(imports: list[Any], *, path: str) -> list[ExternalRef]:
         if root in seen:
             continue
         seen.add(root)
-        refs.append(ExternalRef(module=root))
+        refs.append(ExternalRef(module=root, kind="package", name=root))
     return refs
 
 

@@ -16,6 +16,24 @@ def short_repo(repo: str) -> str:
     return short
 
 
+def module_name(path: str) -> str:
+    """Dotted module name for a Python path.
+
+    ``httpx/_transports/default.py`` -> ``httpx._transports.default``.
+    Package initializers collapse to the package name; a root ``__init__.py``
+    has no module component.
+    """
+    for suffix in (".pyi", ".py"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    if path == "__init__":
+        return ""
+    if path.endswith("/__init__"):
+        path = path[: -len("/__init__")]
+    return path.replace("/", ".")
+
+
 def file_id(*, repo: str, path: str, commit_sha: str) -> str:
     return f"{short_repo(repo)}:file:{path}@{commit_sha}"
 
@@ -32,6 +50,20 @@ def region_id(
 
 def config_key_id(*, repo: str, source: str, key: str) -> str:
     return f"{short_repo(repo)}:config:{source}:{key}"
+
+
+def extracted_import_id(
+    *,
+    file_id: str,
+    line: int,
+    module: str | None,
+    name: str | None,
+    alias: str | None,
+) -> str:
+    """One ID per imported binding, not per import statement."""
+    return (
+        f"{file_id}:import:{line}:{module or ''}:{name or ''}:{alias or ''}"
+    )
 
 
 def external_ref_id(*, repo: str, module: str) -> str:

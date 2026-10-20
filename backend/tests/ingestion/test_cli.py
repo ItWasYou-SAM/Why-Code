@@ -95,3 +95,31 @@ class TestIngestCommand:
         result = run_cli(["ingest", "--repo", REPO, "--since", "not-a-date"])
         assert result.code != 0
         assert "called" not in inject_fake, "must validate args before network"
+
+
+class TestRetryCommand:
+    def test_retry_reprocesses_only_the_errored_pr(
+        self, artifacts_dir, inject_fake, monkeypatch
+    ) -> None:
+        run_cli(INGEST_ARGS)
+        before = json.loads((artifacts_dir / "ingestion_report.json").read_text())
+        assert before["failed_prs"] == 1
+
+        from fakes import FakeGitHubClient, poison_pr
+
+        repaired = poison_pr()
+        repaired["review_comments"] = []  # remove the malformed artifact
+
+        from app.ingestion import cli
+
+        monkeypatch.setattr(
+            cli, "build_client", lambda token: FakeGitHubClient([repaired])
+        )
+        result = run_cli(["retry", "--repo", REPO])
+
+        assert result.code == 0
+        report = json.loads((artifacts_dir / "ingestion_report.json").read_text())
+        assert report["selected_prs"] == 1
+        assert report["processed_prs"] == 1
+        assert report["failed_prs"] == 0
+        assert report["status"] == "completed"

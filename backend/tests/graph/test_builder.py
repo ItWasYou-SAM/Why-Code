@@ -54,22 +54,25 @@ class TestLoad:
 
     def test_load_is_traceable_through_source_record_ids(self) -> None:
         session, _, _ = run_builder()
-        params_seen = session.parameters_seen
-        record_ids = {p.get("record_id") for p in params_seen if "record_id" in p}
-        assert f"{SHORT}:pr:{DEEP}" in record_ids
+        node_keys = {
+            entry["key"]
+            for params in session.parameters_seen
+            for entry in params.get("nodes", [])
+        }
+        assert f"{SHORT}:pr:{DEEP}" in node_keys
 
     def test_load_never_interpolates_record_ids_into_cypher(self) -> None:
         """Same string-interpolation ban as the adapter level; asserted
         here through the real orchestration path."""
         session, _, _ = run_builder()
-        record_ids = [
-            str(p.get("record_id"))
-            for p in session.parameters_seen
-            if p.get("record_id")
+        node_keys = [
+            str(entry.get("key"))
+            for params in session.parameters_seen
+            for entry in params.get("nodes", [])
         ]
         for query, _ in session.calls:
-            for record_id in record_ids:
-                assert record_id not in query, f"leaky cypher: {query}"
+            for node_key in node_keys:
+                assert node_key not in query, f"leaky cypher: {query}"
 
     def test_same_corpus_twice_executes_the_same_number_of_merges(self) -> None:
         from app.graph.builder import GraphBuilder

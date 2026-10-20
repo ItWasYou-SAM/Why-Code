@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS ingestion_state (
     error        TEXT,
     PRIMARY KEY (repo, pr_number)
 );
+
+CREATE TABLE IF NOT EXISTS run_counter (
+    day TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL
+);
 """
 
 
@@ -121,6 +126,17 @@ class EvidenceStore:
         for row in rows:
             yield _row_to_record(row)
 
+    def records_for_pr(self, repo: str, pr_number: int) -> list[EvidenceRecord]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM evidence_records
+            WHERE repo = ? AND pr_number = ?
+            ORDER BY record_type, record_id
+            """,
+            (repo, pr_number),
+        ).fetchall()
+        return [_row_to_record(row) for row in rows]
+
     def count_records(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS c FROM evidence_records").fetchone()
         return int(row["c"])
@@ -131,8 +147,30 @@ class EvidenceStore:
         ).fetchall()
         return {row["record_type"]: int(row["c"]) for row in rows}
 
+    # -- run identity ---------------------------------------------------
+    def next_run_id(self, *, now: Any = None) -> str:
+        """Monotonic, human-readable run id: ``run_2026_10_19_001``.
+
+        Sequence lives in SQLite so two CLI invocations on the same day
+        never reuse an id, even across processes.
+        """
+        from datetime import UTC, datetime
+
+        moment = now or datetime.now(UTC)
+        day = moment.strftime("%Y_%m_%d")
+        row = self.conn.execute(
+            """
+            INSERT INTO run_counter (day, seq) VALUES (?, 1)
+            ON CONFLICT(day) DO UPDATE SET seq = seq + 1
+            RETURNING seq
+            """,
+            (day,),
+        ).fetchone()
+        self.conn.commit()
+        return f"run_{day}_{int(row['seq']):03d}"
+
     # -- raw payloads ---------------------------------------------------
-    def upsert_raw(self, source_id: str, endpoint: str, payload: dict[str, Any]) -> None:
+    def upsert_raw(self, source_id: str, endpoint: str, payload: Any) -> None:
         from datetime import UTC, datetime
 
         self.conn.execute(
@@ -153,14 +191,20 @@ class EvidenceStore:
         )
         self.conn.commit()
 
-    def get_raw(self, source_id: str) -> dict[str, Any] | None:
+    def get_raw(self, source_id: str) -> Any | None:
         row = self.conn.execute(
             "SELECT payload FROM raw_payloads WHERE source_id = ?", (source_id,)
         ).fetchone()
         return json.loads(row["payload"]) if row is not None else None
 
-    def raw_ids(self) -> list[str]:
-        rows = self.conn.execute("SELECT source_id FROM raw_payloads ORDER BY source_id")
+    def raw_ids(self, prefix: str | None = None) -> list[str]:
+        if prefix is None:
+            rows = self.conn.execute("SELECT source_id FROM raw_payloads ORDER BY source_id")
+        else:
+            rows = self.conn.execute(
+                "SELECT source_id FROM raw_payloads WHERE source_id LIKE ? ORDER BY source_id",
+                (f"{prefix}%",),
+            )
         return [row["source_id"] for row in rows]
 
     # -- ingestion state ------------------------------------------------

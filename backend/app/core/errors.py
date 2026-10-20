@@ -17,10 +17,14 @@ class AppError(Exception):
         *,
         component: str | None = None,
         record_id: str | None = None,
+        endpoint: str | None = None,
     ) -> None:
         self.message = message
         self.component = component
         self.record_id = record_id
+        # Endpoint is populated by the GitHub client so a run report can say
+        # *which* call failed, not merely that the PR failed.
+        self.endpoint = endpoint
         super().__init__(message)
 
     def __str__(self) -> str:
@@ -29,6 +33,8 @@ class AppError(Exception):
             context.append(f"component={self.component}")
         if self.record_id:
             context.append(f"record_id={self.record_id}")
+        if self.endpoint:
+            context.append(f"endpoint={self.endpoint}")
         suffix = f" ({', '.join(context)})" if context else ""
         return f"{self.message}{suffix}"
 

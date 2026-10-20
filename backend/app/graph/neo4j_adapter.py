@@ -1,9 +1,10 @@
-"""Ops -> parameterized Cypher.
+"""Schema statements for the evidence graph.
 
-Every value travels as a driver parameter; label and relationship type are
-the only identifiers interpolated, and they come from the fixed plan
-vocabulary. Statement shapes are pinned by tests because identical Cypher
-across runs is what makes replays debuggable.
+Value shapes and writes now live in ``app.graph.records`` and
+``app.graph.batch_writer``. This module keeps the schema side — constraints,
+indexes, scoped deletes — and the ``translate`` entry point that turns a
+plan into batched statements. Labels are the only interpolated identifiers
+and they come from the fixed plan vocabulary.
 """
 
 from __future__ import annotations
@@ -11,6 +12,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from typing import Any
 
+from app.graph.batch_writer import (
+    DEFAULT_BATCH_SIZE,
+    merge_node_batch_statement,
+    merge_relationship_batch_statement,
+    record_statements,
+)
 from app.graph.ops import GraphPlan
 
 
@@ -24,18 +31,6 @@ def constraint_name(label: str) -> str:
 
 def index_name(label: str) -> str:
     return f"whycode_{_slug(label)}_repo_idx"
-
-
-def merge_node_statement(label: str) -> str:
-    return f"MERGE (n:{label} {{record_id: $record_id}}) SET n += $props"
-
-
-def merge_rel_statement(rel_type: str) -> str:
-    return (
-        f"MERGE (a {{record_id: $from_record_id}}) "
-        f"MERGE (b {{record_id: $to_record_id}}) "
-        f"MERGE (a)-[r:{rel_type}]->(b) SET r += $props"
-    )
 
 
 def delete_nodes(label: str) -> str:
@@ -66,18 +61,34 @@ def index_statements(labels: Iterable[str]) -> Iterator[str]:
         yield index_statement(label)
 
 
-def translate(plan: GraphPlan) -> Iterator[tuple[str, dict[str, Any]]]:
-    for node in plan.nodes:
-        yield (
-            merge_node_statement(node.label),
-            {"record_id": node.record_id, "props": node.props},
-        )
-    for rel in plan.rels:
-        yield (
-            merge_rel_statement(rel.rel_type),
-            {
-                "from_record_id": rel.from_record_id,
-                "to_record_id": rel.to_record_id,
-                "props": rel.props,
-            },
-        )
+def schema_statements(labels: Iterable[str]) -> Iterator[str]:
+    """Constraint + index setup for a label set, idempotent by ``IF NOT EXISTS``.
+
+    Materialized labels are consumed once so the generator can feed both
+    halves without the caller rebuilding them.
+    """
+    labels = list(labels)
+    yield from constraint_statements(labels)
+    yield from index_statements(labels)
+
+
+def translate(
+    plan: GraphPlan, *, batch_size: int = DEFAULT_BATCH_SIZE
+) -> list[tuple[str, dict[str, Any]]]:
+    """Translate a plan into grouped, parameterized batch statements."""
+    return record_statements(plan.to_records(), batch_size=batch_size)
+
+
+__all__ = [
+    "constraint_name",
+    "constraint_statement",
+    "constraint_statements",
+    "delete_nodes",
+    "index_name",
+    "index_statement",
+    "index_statements",
+    "merge_node_batch_statement",
+    "merge_relationship_batch_statement",
+    "schema_statements",
+    "translate",
+]

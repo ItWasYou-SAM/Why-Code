@@ -86,6 +86,26 @@ class TestPipeline:
             repo=REPO, path="docs/retries.md", commit_sha=COMMIT
         )
 
+    def test_declared_config_key_matches_a_literal_string_after_extraction(
+        self,
+    ) -> None:
+        class Fetcher:
+            def fetch(self, *, repo, path, commit_sha):
+                if path == "config.yaml":
+                    return "retry:\n  max_attempts: 3\n"
+                if path == "pkg/use.py":
+                    return 'def read():\n    return resolve("retry.max_attempts")\n'
+                raise FileNotFoundError(path)
+
+        result = run_pipeline(
+            corpus(paths=("config.yaml", "pkg/use.py")),
+            fetcher=Fetcher(),
+        )
+        used = [edge for edge in result.graph.edges if edge.rel_type == "USED_BY"]
+        assert len(used) == 1
+        assert used[0].from_id.endswith("config.yaml:retry.max_attempts")
+        assert used[0].to_id.endswith("pkg/use.py@" + COMMIT + ":read")
+
 
 class TestCachedFetcher:
     def test_cache_avoids_a_second_fetch(self, tmp_path) -> None:
@@ -181,3 +201,53 @@ class TestCli:
 
         validate_code = main(["validate", "--batch", str(out)])
         assert validate_code == 0
+
+    def test_graph_and_validate_jsonl_round_trip(self, tmp_path) -> None:
+        normalized = tmp_path / "normalized.jsonl"
+        normalized.write_text(
+            "\n".join(
+                json.dumps(record)
+                for record in corpus(
+                    paths=("docs/retries.md",),
+                    doc_contents={"docs/retries.md": fixture_text("sample_doc.md")},
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        batch_out = tmp_path / "batch.json"
+        assert (
+            main(
+                [
+                    "extract",
+                    "--repo",
+                    REPO,
+                    "--normalized",
+                    str(normalized),
+                    "--commit",
+                    COMMIT,
+                    "--out",
+                    str(batch_out),
+                ]
+            )
+            == 0
+        )
+        graph_out = tmp_path / "structural_graph.jsonl"
+        assert main(["graph", "--batch", str(batch_out), "--out", str(graph_out)]) == 0
+        report_out = tmp_path / "validation_report.json"
+        assert (
+            main(
+                [
+                    "validate",
+                    "--graph",
+                    str(graph_out),
+                    "--out",
+                    str(report_out),
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(report_out.read_text())
+        assert payload["status"] in {"pass", "pass_with_warnings"}
+        assert "relationships_created" in payload
+        assert "files_parsed" in payload

@@ -128,6 +128,10 @@ def normalize_changed_file(repo: str, pr_number: int, blob: dict[str, Any]) -> E
     record_id = pr_file_id(repo=repo, number=pr_number, path=path)
     payload = {
         "path": path,
+        # GitHub only sends previous_filename on renames. It is always
+        # present (as null) so downstream code never has to guess whether
+        # a missing key means "not renamed" or "normalizer dropped it".
+        "previous_filename": blob.get("previous_filename"),
         "status": blob.get("status") or "modified",
         "additions": int(blob.get("additions") or 0),
         "deletions": int(blob.get("deletions") or 0),

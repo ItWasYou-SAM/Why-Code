@@ -4,7 +4,12 @@
     python -m app.structural.cli fetch   --normalized ... [--content-root DIR]
     python -m app.structural.cli extract --normalized ... --high-signal ... --content-root DIR
     python -m app.structural.cli build   --normalized ... --content-root DIR [--write]
+    python -m app.structural.cli graph   --batch artifacts/structural/batch.json \
+                                          --out artifacts/structural/structural_graph.jsonl
     python -m app.structural.cli validate --batch artifacts/structural/batch.json
+    python -m app.structural.cli validate --uri $NEO4J_URI --database neo4j --repo encode/httpx
+    python -m app.structural.cli write-graph \
+        --input artifacts/structural/structural_graph.jsonl --uri $NEO4J_URI --database neo4j
 
 The default is dry-run: no Neo4j connection is opened unless ``--write``
 is passed and Neo4j settings are present.
@@ -19,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.errors import AppError, InvalidRecordError
+from app.graph.records import GraphRecords, records_from_jsonl, records_to_jsonl
 from app.structural.config import StructuralConfig
 from app.structural.content.content_store import ContentStore
 from app.structural.content.file_content_fetcher import (
@@ -28,9 +34,15 @@ from app.structural.content.file_content_fetcher import (
 )
 from app.structural.extraction.file_extractor import FileExtractor
 from app.structural.extraction.models import StructuralBatch
+from app.structural.graph.graph_records import build_structural_graph
 from app.structural.pipeline import StructuralPipeline
 from app.structural.selection.file_selector import FileSelector, load_jsonl
-from app.structural.validation.graph_validator import validate_batch
+from app.structural.validation.graph_validator import (
+    Neo4jStructuralValidator,
+    ValidationReport,
+    validate_batch,
+    validate_graph,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -49,8 +61,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _extract(args)
         if args.command == "build":
             return _build(args)
+        if args.command == "graph":
+            return _graph(args)
         if args.command == "validate":
             return _validate(args)
+        if args.command == "write-graph":
+            return _write_graph(args)
     except AppError as error:
         print(f"{type(error).__name__}: {error}")
         return 1
@@ -105,19 +121,16 @@ def _pipeline(args: argparse.Namespace) -> StructuralPipeline:
     store = ContentStore(fetcher, config.content_dir)
     writer = None
     if getattr(args, "write", False):
-        from neo4j import GraphDatabase
-
         from app.core.config import Settings
-        from app.graph.neo4j_adapter import translate  # noqa: F401
-
-        settings = Settings.from_env()
-        driver = GraphDatabase.driver(
-            settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
-        )
-        session = driver.session(database=settings.neo4j_database)
+        from app.graph.neo4j_driver import Neo4jClient
         from app.structural.graph.neo4j_writer import StructuralGraphWriter
 
-        writer = StructuralGraphWriter(session)
+        settings = Settings.from_env()
+        client = Neo4jClient.from_settings(settings)
+        writer = StructuralGraphWriter(client)
+        # Constraints and indexes are idempotent (IF NOT EXISTS) and run
+        # once before the first batch, so a load can never race its schema.
+        writer.prepare_schema()
     return StructuralPipeline(
         config=config,
         fetcher=fetcher,
@@ -236,11 +249,141 @@ def _build(args: argparse.Namespace) -> int:
 
 
 def _validate(args: argparse.Namespace) -> int:
-    payload = json.loads(Path(args.batch).read_text(encoding="utf-8"))
-    batch = StructuralBatch.model_validate(payload)
-    report = validate_batch(batch)
-    print(json.dumps(report.as_dict(), indent=2))
+    report = _run_validation(args)
+    payload = report.report()
+    out = Path(args.out) if args.out else None
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    if out is not None:
+        print(out)
     return 0 if report.ok else 1
+
+
+def _run_validation(args: argparse.Namespace) -> ValidationReport:
+    high_signal = _high_signal_numbers(args)
+    if getattr(args, "uri", None):
+        from app.graph.neo4j_driver import Neo4jClient
+
+        if not args.repo:
+            raise InvalidRecordError(
+                "post-write validation needs --repo", component="structural"
+            )
+        client = Neo4jClient.connect(
+            uri=args.uri,
+            database=args.database,
+            user=_neo4j_env("WHYCODE_NEO4J_USER"),
+            password=_neo4j_env("WHYCODE_NEO4J_PASSWORD"),
+        )
+        try:
+            return Neo4jStructuralValidator(client).full_report(args.repo)
+        finally:
+            client.close()
+
+    batch: StructuralBatch | None = None
+    graph = None
+    if getattr(args, "batch", None):
+        batch = StructuralBatch.model_validate(
+            json.loads(Path(args.batch).read_text(encoding="utf-8"))
+        )
+        graph = build_structural_graph(batch)
+    if getattr(args, "graph", None):
+        records: GraphRecords = records_from_jsonl(
+            Path(args.graph).read_text(encoding="utf-8").splitlines()
+        )
+        from app.structural.graph.graph_records import StructuralGraph
+
+        graph = StructuralGraph(
+            nodes=list(records.nodes), edges=list(records.relationships)
+        )
+    if graph is None:
+        raise InvalidRecordError(
+            "validate needs --batch, --graph or --uri", component="structural"
+        )
+
+    report = validate_batch(batch) if batch is not None else ValidationReport()
+    graph_report = validate_graph(graph, batch=batch, high_signal_pr_numbers=high_signal)
+    report.errors.extend(graph_report.errors)
+    report.warnings.extend(graph_report.warnings)
+    report.not_checked.extend(graph_report.not_checked)
+    report.stats.update(graph_report.stats)
+    if not graph_report.ok:
+        report.ok = False
+    return report
+
+
+def _high_signal_numbers(args: argparse.Namespace) -> set[int] | None:
+    path = getattr(args, "high_signal", None)
+    if not path:
+        return None
+    numbers: set[int] = set()
+    for row in load_jsonl(path):
+        number = row.get("pr_number")
+        if isinstance(number, int):
+            numbers.add(number)
+    return numbers
+
+
+def _graph(args: argparse.Namespace) -> int:
+    batch = StructuralBatch.model_validate(
+        json.loads(Path(args.batch).read_text(encoding="utf-8"))
+    )
+    graph = build_structural_graph(batch)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        records_to_jsonl(graph.to_records()), encoding="utf-8"
+    )
+    counts = graph.counts()
+    print(f"nodes={sum(counts['nodes'].values())} edges={len(graph.edges)}")
+    print(out)
+    return 0
+
+
+def _write_graph(args: argparse.Namespace) -> int:
+    records = records_from_jsonl(
+        Path(args.input).read_text(encoding="utf-8").splitlines()
+    )
+    from app.graph.neo4j_driver import Neo4jClient
+    from app.structural.graph.graph_records import StructuralGraph
+    from app.structural.graph.neo4j_writer import StructuralGraphWriter
+
+    graph = StructuralGraph(
+        nodes=list(records.nodes), edges=list(records.relationships)
+    )
+    if args.dry_run:
+        print(json.dumps(graph.counts(), indent=2))
+        return 0
+    if not args.uri:
+        raise InvalidRecordError(
+            "write-graph needs --uri (or --dry-run)", component="structural"
+        )
+    client = Neo4jClient.connect(
+        uri=args.uri,
+        database=args.database,
+        user=_neo4j_env("WHYCODE_NEO4J_USER"),
+        password=_neo4j_env("WHYCODE_NEO4J_PASSWORD"),
+    )
+    try:
+        writer = StructuralGraphWriter(client)
+        writer.prepare_schema()
+        report = writer.write(graph, repo=args.repo)
+    finally:
+        client.close()
+    print(json.dumps(report.as_dict(), indent=2))
+    return 0
+
+
+def _neo4j_env(name: str) -> str:
+    import os
+
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise InvalidRecordError(
+            f"set {name} to talk to Neo4j", component="structural"
+        )
+    return value
 
 
 def _print_summary(result: Any) -> None:
@@ -301,9 +444,43 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--write", action="store_true")
     build.set_defaults(func=_build)
 
-    validate = sub.add_parser("validate", help="validate a previously extracted batch")
-    validate.add_argument("--batch", required=True)
+    validate = sub.add_parser(
+        "validate", help="run the Phase 10 structural acceptance checks"
+    )
+    validate.add_argument("--batch", default=None, help="an extracted batch JSON")
+    validate.add_argument(
+        "--graph", default=None, help="a structural graph records JSONL"
+    )
+    validate.add_argument(
+        "--high-signal",
+        default=None,
+        help="high-signal PR JSONL; enables the region-coverage check",
+    )
+    validate.add_argument("--repo", default=None)
+    validate.add_argument(
+        "--uri", default=None, help="Neo4j URI; validates the loaded graph"
+    )
+    validate.add_argument("--database", default="neo4j")
+    validate.add_argument("--out", default=None)
     validate.set_defaults(func=_validate)
+
+    graph = sub.add_parser(
+        "graph",
+        help="build structural graph records from an extracted batch (offline)",
+    )
+    graph.add_argument("--batch", required=True)
+    graph.add_argument("--out", required=True)
+    graph.set_defaults(func=_graph)
+
+    write_graph = sub.add_parser(
+        "write-graph", help="load a structural graph records JSONL into Neo4j"
+    )
+    write_graph.add_argument("--input", required=True)
+    write_graph.add_argument("--repo", required=True)
+    write_graph.add_argument("--uri", default=None)
+    write_graph.add_argument("--database", default="neo4j")
+    write_graph.add_argument("--dry-run", action="store_true")
+    write_graph.set_defaults(func=_write_graph)
     return parser
 
 

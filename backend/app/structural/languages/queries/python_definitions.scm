@@ -19,3 +19,8 @@
 (assignment
   left: (identifier) @name
   right: (_) @value) @definition.constant
+
+; Explicit PEP 695 alias: ``type UserId = int``.
+(type_alias_statement
+  left: (type (identifier) @name)
+  right: (_) @value) @definition.type

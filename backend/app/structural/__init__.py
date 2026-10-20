@@ -17,12 +17,17 @@ from app.structural.extraction.models import (
     Symbol,
     SymbolKind,
 )
+from app.structural.extraction.outputs import (
+    ExtractionOutputs,
+    build_extraction_outputs,
+)
 from app.structural.graph.graph_records import build_structural_graph
 from app.structural.pipeline import StructuralPipeline
 
 __all__ = [
     "CodeRegion",
     "ConfigKey",
+    "ExtractionOutputs",
     "FileExtractor",
     "ImportRef",
     "Language",
@@ -32,6 +37,7 @@ __all__ = [
     "StructuralPipeline",
     "Symbol",
     "SymbolKind",
+    "build_extraction_outputs",
     "build_structural_graph",
     "extract_file",
 ]
