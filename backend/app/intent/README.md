@@ -4,7 +4,7 @@ Converts high-signal pull requests into evidence-linked engineering decisions, c
 
 This is a **pipeline, not an agent**. The model proposes one strict candidate envelope per PR; deterministic code validates every claim, citation, target and participant before anything is written.
 
-**Status:** implemented through Phase 8 (supersession, de-duplication and the Neo4j intent writer). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository.
+**Status:** implemented through Phase 9 (supersession, de-duplication, the Neo4j intent writer and the human review queue). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository.
 
 ## Pipeline
 
@@ -141,6 +141,13 @@ PYTHONPATH=. python -m app.intent.cli extract \
 PYTHONPATH=. python -m app.intent.cli write \
   --input ../artifacts/intent/intent_graph.jsonl \
   --repo encode/httpx --dry-run
+
+# Human decisions over the queue (Phase 9)
+PYTHONPATH=. python -m app.intent.cli review \
+  --queue ../artifacts/intent/review_queue.jsonl \
+  --repo encode/httpx \
+  --action approve \
+  --candidate rq_httpx_...
 ```
 
 ## Layout

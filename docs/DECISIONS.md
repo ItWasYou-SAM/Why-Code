@@ -1170,3 +1170,32 @@ contract, the batched parameterized merges and the dry-run/integrity behaviour;
 resulting graph keep the write contract fields.
 
 **Status.** active
+
+---
+
+## D-0047 — 2026-10-20 — Intent Phase 9: uncertain extraction goes to a human review queue
+
+**Decision.** Phase 9 builds the human review queue the pipeline already
+pointed at: rejected, ambiguous, duplicate and contested outputs are queued, never
+silently dropped and never auto-merged.
+
+Each queued item carries the phase-9 shape: `candidate_id`, `pr_number`, `claim`,
+`status` (`needs_review` while queued), `reason`, `evidence` (cited record IDs),
+`targets` (resolved graph keys), `proposed_confidence` and `reviewer_decision`
+(`null` until a human acts).
+
+Reviewers resolve items through one of six actions: `approve`, `reject`,
+`edit_claim`, `change_status`, `mark_contested`, `mark_duplicate`. An unknown
+action or unknown candidate is refused; an approve/reject outcome moves the item
+to `approved`/`rejected`, an edit replaces the claim, a contest marks it
+contested, a duplicate marks it duplicate.
+
+**Consequences.** The queue is the only human surface for the LLM: the model is
+never trusted to self-certify, and a `needs_review` item never reaches the graph
+without a reviewer decision.
+
+**Tests.** `tests/intent/test_intent_review_queue.py` pins the item shape and
+every review action; `tests/intent/test_intent_pipeline.py` pins that an
+unsupported claim queues a phase-9 item with evidence, targets and confidence.
+
+**Status.** active

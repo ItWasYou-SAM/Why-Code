@@ -310,18 +310,30 @@ class ReviewReason(StrEnum):
 
 
 class ReviewItem(BaseModel):
+    """One human decision over an uncertain extraction.
+
+    Phase 8/9 write contract: the queue item carries the candidate identity,
+    the claim under review, the queue status, the evidence that was cited, the
+    resolved targets and the proposed confidence — plus the reviewer's own
+    decision. Nothing here is ever a silent auto-merge.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    item_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
     reason: ReviewReason
     repo: str = Field(min_length=1)
     pr_number: int | None = None
     candidate_class: str | None = None
     claim: str = ""
+    status: str = "needs_review"
+    evidence: list[str] = Field(default_factory=list)
+    targets: list[str] = Field(default_factory=list)
+    proposed_confidence: Confidence = Confidence.MEDIUM
+    reviewer_decision: str | None = None
     issues: list[str] = Field(default_factory=list)
     raw_output: str | None = None
     created_at: str = ""
-    status: str = "pending"
 
 
 class IntentSummary(BaseModel):

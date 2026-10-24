@@ -33,6 +33,7 @@ from app.intent.config import IntentConfig
 from app.intent.graph.intent_records import IntentGraph
 from app.intent.llm.provider import build_provider
 from app.intent.records import load_jsonl
+from app.intent.review.review_queue import REVIEW_ACTIONS, ReviewQueue
 from app.intent.selection.candidate_detector import CandidateDetector
 from app.intent.selection.evidence_selector import EvidenceSelector
 from app.intent.validation.graph_link_validator import GraphIndex
@@ -53,6 +54,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _write(args)
         if args.command == "validate":
             return _validate(args)
+        if args.command == "review":
+            return _review(args)
     except AppError as error:
         print(f"{type(error).__name__}: {error}")
         return 1
@@ -269,6 +272,32 @@ def _validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review(args: argparse.Namespace) -> int:
+    items = ReviewQueue.from_jsonl(args.queue, repo=args.repo)
+    item = next(
+        (entry for entry in items if entry.candidate_id == args.candidate),
+        None,
+    )
+    if item is None:
+        raise InvalidRecordError(
+            f"no review item {args.candidate}",
+            component="intent",
+            record_id=args.candidate,
+        )
+    queue = ReviewQueue(repo=args.repo)
+    queue.items = [item]
+    updated = queue.apply(
+        args.candidate,
+        args.action,
+        claim=args.claim,
+        status=args.status,
+    )
+    out = queue.write_jsonl(args.queue)
+    print(json.dumps(updated.model_dump(mode="json"), indent=2, sort_keys=True))
+    print(out)
+    return 0
+
+
 def _env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -324,6 +353,22 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--repo", required=True)
     validate.add_argument("--out", default=None)
     validate.set_defaults(func=_validate)
+
+    review = sub.add_parser(
+        "review", help="apply a human review decision to the review queue"
+    )
+    review.add_argument("--queue", required=True, help="review_queue.jsonl")
+    review.add_argument("--repo", required=True)
+    review.add_argument(
+        "--action",
+        required=True,
+        choices=list(REVIEW_ACTIONS),
+        help="approve | reject | edit_claim | change_status | mark_contested | mark_duplicate",
+    )
+    review.add_argument("--candidate", required=True, help="candidate_id")
+    review.add_argument("--claim", default=None, help="replacement claim (edit_claim)")
+    review.add_argument("--status", default=None, help="replacement status (change_status)")
+    review.set_defaults(func=_review)
     return parser
 
 

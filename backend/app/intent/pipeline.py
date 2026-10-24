@@ -566,6 +566,9 @@ class IntentPipeline:
                 candidate_class=candidate.candidate_class.value,
                 claim=proposal.claim,
                 issues=validation.issue_texts,
+                evidence=list(validation.evidence.accepted_ids),
+                targets=[target.graph_key for target in validation.targets.targets],
+                proposed_confidence=validation.confidence.level,
             )
             return None
 
@@ -594,6 +597,9 @@ class IntentPipeline:
                 candidate_class=candidate.candidate_class.value,
                 claim=proposal.claim,
                 issues=rule_result.issue_texts,
+                evidence=list(validation.evidence.accepted_ids),
+                targets=[target.graph_key for target in validation.targets.targets],
+                proposed_confidence=validation.confidence.level,
             )
             return None
 
@@ -640,6 +646,9 @@ class IntentPipeline:
                 claim=proposal.claim,
                 issues=validation.targets.issues
                 or ["some targets were unresolved; recorded as an observation"],
+                evidence=list(validation.evidence.accepted_ids),
+                targets=[target.graph_key for target in validation.targets.targets],
+                proposed_confidence=validation.confidence.level,
             )
         if validation.canonical_status is DecisionStatus.CONTESTED:
             review.add(
@@ -648,6 +657,9 @@ class IntentPipeline:
                 candidate_class=candidate.candidate_class.value,
                 claim=proposal.claim,
                 issues=validation.notes,
+                evidence=list(validation.evidence.accepted_ids),
+                targets=[target.graph_key for target in validation.targets.targets],
+                proposed_confidence=validation.confidence.level,
             )
         return intent
 

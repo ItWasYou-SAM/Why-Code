@@ -541,6 +541,11 @@ class TestPhase4Firewall:
             FinalStatus.NEEDS_REVIEW
         )
         assert result.evidence_validations[0].unsupported_claims
+        item = result.review_queue.items[0]
+        assert item.status == "needs_review"
+        assert item.evidence
+        assert item.targets
+        assert item.proposed_confidence is not None
 
     def test_no_structural_target_is_rejected(self) -> None:
         result = _single(
