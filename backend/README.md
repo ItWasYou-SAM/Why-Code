@@ -28,7 +28,7 @@ backend/
 │   ├── graph/        # Component 2: records, mapping, regions, writer
 │   ├── ingestion/    # Component 1: client, normalizer, store, scorer, exporter
 │   ├── structural/   # Component 3: selection, content, tree-sitter, graph, validation
-│   ├── intent/       # Component 4: selection, context, LLM, validation, graph, review
+│   ├── intent/       # Component 4: selection, context, LLM, validation, graph, review, evaluation
 │   ├── retrieval/    # Component 5: not built
 │   └── main.py       # FastAPI factory; /health only
 ├── tests/            # contract tests grouped by component
@@ -93,9 +93,16 @@ PYTHONPATH=. python -m app.intent.cli extract \
   --structural-graph ../artifacts/structural/structural_graph.jsonl \
   --db ../artifacts/evidence.db \
   --artifacts-dir ../artifacts
+
+# 4. Score the run against the hand-curated golden decisions (no LLM)
+PYTHONPATH=. python -m app.intent.cli evaluate \
+  --predictions ../artifacts/intent/intent_batch.json \
+  --corpus all \
+  --repo encode/httpx \
+  --out ../artifacts/intent/evaluation_report.json
 ```
 
-Every command is safe to rerun: ingestion is idempotent, structural extraction replays from the content manifest, and intent extraction is dry-run unless `--write` is passed.
+Every command is safe to rerun: ingestion is idempotent, structural extraction replays from the content manifest, and intent extraction is dry-run unless `--write` is passed. The evaluator reads a completed batch and never calls a model. The public golden corpus is curated but has not been executed here; see [`docs/GOLDEN_SET.md`](../docs/GOLDEN_SET.md).
 
 ## Tests and quality gates
 
@@ -105,7 +112,7 @@ ruff check app tests
 mypy app
 ```
 
-Current state: **658 passed, 8 skipped**, ruff clean, mypy clean over 113 source files.
+Current state: **681 passed, 8 skipped**, ruff clean, mypy clean over 120 source files.
 
 - `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection. The canonical suite excludes it.
 - The 8 skipped tests are live-Neo4j integrations. Enable them with `WHYCODE_TEST_NEO4J_URI` plus `_USER`, `_PASSWORD` and `_DATABASE`.

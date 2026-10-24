@@ -4,7 +4,7 @@ Converts high-signal pull requests into evidence-linked engineering decisions, c
 
 This is a **pipeline, not an agent**. The model proposes one strict candidate envelope per PR; deterministic code validates every claim, citation, target and participant before anything is written.
 
-**Status:** implemented through Phase 9 (supersession, de-duplication, the Neo4j intent writer and the human review queue). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository.
+**Status:** implemented through Phase 10 (supersession, de-duplication, the Neo4j intent writer, the human review queue and a hand-curated golden-decision evaluation set). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository, and the public golden corpus has not been run because its ingestion artifacts are absent.
 
 ## Pipeline
 
@@ -111,10 +111,47 @@ artifacts/intent/
 ├── intent_graph.jsonl       # validated nodes/relationships
 ├── review_queue.jsonl       # rejected / ambiguous / conflicted outputs
 ├── extraction_report.json   # counts and reasons
+├── evaluation_report.json   # Phase 10 metrics against the golden set
 └── candidates.json          # detect report (detect command)
 ```
 
 Nothing is silently dropped: rejected, low-signal, ambiguous, duplicate, conflicted and high-impact outputs enter the review queue with the reason and raw model text.
+
+## Golden evaluation (Phase 10)
+
+The extractor is measured against a small, manually curated golden set, not
+against extraction volume (D-0048). The bundled suite has **20 cases**:
+
+- **5 fixture cases** over the checked-in retry/timeout evidence, scored
+  end-to-end in `tests/intent/test_intent_pipeline.py`;
+- **15 public `encode/httpx` cases** (12 decisions, 3 refusals) waiting for a
+  real ingestion/structural run.
+
+Every case records `case_id`, `question`, `expected_decision`,
+`expected_targets`, `expected_evidence`, `expected_status` and
+`expected_supersession`; a case cannot enter without a human-located artifact
+(D-0002). The evaluator reports candidate recall, decision precision/recall,
+evidence precision/recall, target precision/recall, supersession
+precision/recall, refusal correctness and status accuracy. Matching is
+deterministic and one-to-one (PR, evidence, targets, claim vocabulary), with no
+model in the scoring loop.
+
+Precision counts only predictions from PRs annotated in the golden set.
+Predictions from unannotated PRs are out of scope, not false positives. A
+metric with no applicable cases is `null`, never `0`: "not checked" is not
+"checked and clean". The fixture baseline currently has target recall `0.5`:
+proposals name the `retries` config key but not the enclosing symbol or file.
+That gap is recorded, not hidden by weakening the golden expectations.
+
+The public corpus has **not** been executed in this repository because
+`evidence.db`, `normalized.jsonl`, `high_signal_prs.jsonl` and a live LLM run
+are absent. Do not quote public-suite numbers until such a run exists. Metric
+formulas, report fields and case provenance are documented in
+[`app/intent/evaluation/README.md`](evaluation/README.md) and
+[`docs/GOLDEN_SET.md`](../../../docs/GOLDEN_SET.md).
+
+The evaluator scores an existing batch offline; it is not a runtime pipeline
+stage.
 
 ## CLI
 
@@ -148,6 +185,13 @@ PYTHONPATH=. python -m app.intent.cli review \
   --repo encode/httpx \
   --action approve \
   --candidate rq_httpx_...
+
+# Score a run against the golden set (Phase 10, no LLM)
+PYTHONPATH=. python -m app.intent.cli evaluate \
+  --predictions ../artifacts/intent/intent_batch.json \
+  --corpus all \
+  --repo encode/httpx \
+  --out ../artifacts/intent/evaluation_report.json
 ```
 
 ## Layout
@@ -161,8 +205,9 @@ app/intent/
 ├── validation/   # schema, evidence, rules, claims, confidence, supersession, dedupe
 ├── review/       # JSONL review queue
 ├── graph/        # intent records + Cypher writer
+├── evaluation/   # golden cases, deterministic matching and metrics
 ├── pipeline.py   # orchestration
-└── cli.py        # detect / extract / write / validate
+└── cli.py        # detect / extract / write / review / evaluate
 ```
 
 ## Tests
@@ -171,3 +216,7 @@ app/intent/
 cd backend
 PYTHONPATH=. python -m pytest tests/intent -q
 ```
+
+`tests/intent/test_evaluation.py` pins the golden-set shape, metric formulas,
+null-vs-zero honesty and the `evaluate` CLI. `tests/intent/test_intent_pipeline.py`
+scores a real fixture run and records the target-recall gap described above.

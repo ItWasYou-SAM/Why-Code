@@ -30,6 +30,9 @@ from app.core.errors import AppError, InvalidRecordError
 from app.graph.records import GraphRecords, records_from_jsonl, records_to_jsonl
 from app.ingestion.store import EvidenceStore
 from app.intent.config import IntentConfig
+from app.intent.evaluation.golden import default_golden_path
+from app.intent.evaluation.metrics import EvaluationReport
+from app.intent.evaluation.runner import evaluate_files
 from app.intent.graph.intent_records import IntentGraph
 from app.intent.llm.provider import build_provider
 from app.intent.records import load_jsonl
@@ -56,6 +59,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _validate(args)
         if args.command == "review":
             return _review(args)
+        if args.command == "evaluate":
+            return _evaluate(args)
     except AppError as error:
         print(f"{type(error).__name__}: {error}")
         return 1
@@ -298,6 +303,55 @@ def _review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _evaluate(args: argparse.Namespace) -> int:
+    golden = Path(args.golden) if args.golden else default_golden_path()
+    reports = evaluate_files(
+        predictions_path=args.predictions,
+        golden_path=golden,
+        repo=args.repo,
+        corpus=args.corpus,
+    )
+    out = Path(
+        args.out
+        or Path(args.artifacts_dir) / "intent" / "evaluation_report.json"
+    )
+    if args.corpus == "all":
+        payload: Any = {
+            "repo": args.repo,
+            "golden": str(golden),
+            "predictions": args.predictions,
+            "corpora": {
+                name: report.model_dump(mode="json")
+                for name, report in reports.items()
+            },
+        }
+        _write_json(out, payload)
+        for name, report in reports.items():
+            _print_metric_line(name, report)
+    else:
+        report = reports[args.corpus]
+        _write_json(out, report.model_dump(mode="json"))
+        _print_metric_line(args.corpus, report)
+    print(out)
+    return 0
+
+
+def _print_metric_line(corpus: str, report: EvaluationReport) -> None:
+    metrics = report.metrics
+    parts = [
+        f"decision precision={_metric(metrics.decision_precision.value)}",
+        f"decision recall={_metric(metrics.decision_recall.value)}",
+        f"candidate recall={_metric(metrics.candidate_recall.value)}",
+        f"evidence precision={_metric(metrics.evidence_precision.value)}",
+        f"refusal correctness={_metric(metrics.refusal_correctness.value)}",
+    ]
+    print(f"{corpus}: " + ", ".join(parts))
+
+
+def _metric(value: float | None) -> str:
+    return "not checked" if value is None else f"{value:.2f}"
+
+
 def _env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -369,6 +423,30 @@ def _parser() -> argparse.ArgumentParser:
     review.add_argument("--claim", default=None, help="replacement claim (edit_claim)")
     review.add_argument("--status", default=None, help="replacement status (change_status)")
     review.set_defaults(func=_review)
+
+    evaluate = sub.add_parser(
+        "evaluate",
+        help="score an intent run against the human-curated golden decisions",
+    )
+    evaluate.add_argument(
+        "--predictions",
+        required=True,
+        help="intent_batch.json, intent JSONL, or a hand-written prediction file",
+    )
+    evaluate.add_argument(
+        "--golden",
+        default=None,
+        help="golden decisions JSONL (defaults to the bundled set)",
+    )
+    evaluate.add_argument("--repo", default="encode/httpx")
+    evaluate.add_argument(
+        "--corpus",
+        default="all",
+        help="fixture, httpx-public, or all (default: all)",
+    )
+    evaluate.add_argument("--artifacts-dir", default="artifacts")
+    evaluate.add_argument("--out", default=None)
+    evaluate.set_defaults(func=_evaluate)
     return parser
 
 

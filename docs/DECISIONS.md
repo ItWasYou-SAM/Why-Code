@@ -1199,3 +1199,48 @@ every review action; `tests/intent/test_intent_pipeline.py` pins that an
 unsupported claim queues a phase-9 item with evidence, targets and confidence.
 
 **Status.** active
+
+---
+
+## D-0048 — 2026-10-24 — Intent Phase 10: correctness is measured against a hand-curated golden set
+
+**Decision.** Phase 10 adds a small, manually curated golden decision set and
+a deterministic evaluator. The set has **20 cases**: five executable fixture
+cases and fifteen public `encode/httpx` cases (17 decisions, three refusals).
+Every case records `case_id`, `question`, `expected_decision`,
+`expected_targets`, `expected_evidence`, `expected_status` and
+`expected_supersession`. Following D-0002, a case only enters after a human has
+located the real artifact: fixture evidence is checked against the checked-in
+fixtures and graph, while public cases cite merged PRs and linked issues. A
+refusal case is a real merged PR with no evidence-backed engineering decision,
+not an empty placeholder.
+
+The evaluator scores candidate recall, decision precision/recall, evidence
+precision/recall, target precision/recall, supersession precision/recall,
+refusal correctness and status accuracy. Matching is deterministic and one-to-
+one: PR, evidence, targets and claim vocabulary, with no model in the scoring
+loop.
+
+**Honesty rules.** The suite measures correctness, not extraction volume.
+Precision counts only predictions from PRs annotated in the golden set; a
+correct decision from an unannotated PR is not a false positive, and the report
+counts it as out of scope. A metric with no applicable cases is `null`, never
+`0` — "not checked" is not "checked and clean". Ground truth is frozen: the
+fixture target recall of `0.5` is recorded as a real pipeline gap, not repaired
+by removing the symbol/file targets the extractor fails to emit. Cases are not
+edited to match a run; corrections require a located artifact.
+
+**Consequences.** The public suite has **not** been executed because this
+repository lacks `evidence.db`, `normalized.jsonl`, `high_signal_prs.jsonl` and
+a live LLM run. No public-suite numbers may be claimed until such a run exists.
+The fixture corpus is scored end-to-end in tests and is the harness baseline.
+The human-readable case index and provenance live in `docs/GOLDEN_SET.md`; the
+metric formulas and caveats live in `backend/app/intent/evaluation/README.md`.
+
+**Tests.** `tests/intent/test_evaluation.py` pins the suite shape, evidence and
+target resolution, prediction loading, every metric's failure mode, null-vs-zero
+handling, refusal scoring and the `evaluate` CLI;
+`tests/intent/test_intent_pipeline.py` scores a real fixture run against the
+golden cases and pins the documented target-recall gap.
+
+**Status.** active

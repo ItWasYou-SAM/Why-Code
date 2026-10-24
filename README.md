@@ -11,7 +11,7 @@
   <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
   <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-AuraDB-4581C3?logo=neo4j&logoColor=white" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-658%20passed-2ea44f" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-681%20passed-2ea44f" />
   <img alt="Status" src="https://img.shields.io/badge/status-backend%20pipeline-blue" />
   <img alt="Retrieval" src="https://img.shields.io/badge/retrieval-not%20built-orange" />
 </p>
@@ -117,7 +117,7 @@ ruff check app tests
 mypy app
 ```
 
-Current result: **658 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips are opt-in live-Neo4j tests.
+Current result: **681 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips are opt-in live-Neo4j tests.
 
 > `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection time. The canonical suite excludes it.
 
@@ -129,11 +129,11 @@ Current result: **658 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 | **1 · GitHub ingestion** | ✅ | Merged-PR client, normalizer, SQLite store, relevance scoring, JSONL exports, ingestion report, CLI | Live 50–100 PR acceptance run is not reproduced in the repo (needs a token) |
 | **2 · Neo4j graph builder** | ✅ | Graph mapping, commit-scoped regions, batched `MERGE` writer, constraints/indexes, integrity checks | Live AuraDB load is opt-in and was not executed here |
 | **3 · Structural enricher** | ✅ | Tree-sitter Python symbols/imports/references, YAML/TOML/env config keys, docs, regions, validation | Python only; JS/TS/Rust and lock files are skipped by design |
-| **4 · Decision extractor** | ✅ | Candidate detection, context packing, strict schemas, evidence/claim/rule gates, confidence, supersession, dedupe, review queue, Neo4j writer | Live LLM acceptance (≥10 decisions on 20 PRs) not demonstrated in this repo |
+| **4 · Decision extractor** | ✅ | Candidate detection, context packing, strict schemas, evidence/claim/rule gates, confidence, supersession, dedupe, review queue, Neo4j writer, hand-curated golden set + deterministic evaluation | Live LLM acceptance and the public golden-suite run are not demonstrated in this repo (public cases are curated but unexecuted) |
 | **5 · GraphRAG retrieval** | ❌ | — | Query planner, hybrid retrieval, graph expansion, context packing for answers, synthesis with citations, refusal policy, `/api/v1/*` |
 | **6 · Evidence UI** | 🟡 | Local Next.js prototype (screenshots above) | Source not published; no live API integration; not deployed |
 
-**Also not done:** golden-question suite, embeddings/vector index, Aura Agent/MCP integration, CI and Docker, live acceptance evidence for Components 1–4.
+**Also not done:** retrieval golden-question suite, embeddings/vector index, Aura Agent/MCP integration, CI and Docker, live acceptance evidence for Components 1–4.
 
 ## Project layout
 
@@ -149,7 +149,7 @@ Current result: **658 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 │   │   ├── intent/        # Component 4  → README
 │   │   ├── retrieval/     # Component 5  (not built)
 │   │   └── main.py        # FastAPI factory; /health only
-│   ├── tests/             # 658 tests, grouped by component
+│   ├── tests/             # 681 tests, grouped by component
 │   └── README.md          # backend guide
 ├── docs/                  # decisions and validation reports
 ├── assets/readme/         # banner + screenshots
@@ -168,6 +168,7 @@ Current result: **658 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 | 4 · Decision extractor | [`backend/app/intent/README.md`](backend/app/intent/README.md) |
 | 5 · Retrieval | [`backend/app/retrieval/README.md`](backend/app/retrieval/README.md) |
 | Product decisions | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
+| Golden decision set | [`docs/GOLDEN_SET.md`](docs/GOLDEN_SET.md) |
 | Ingestion report | [`docs/INGESTION_REPORT.md`](docs/INGESTION_REPORT.md) |
 | Validation report | [`docs/VALIDATION_REPORT_PHASE10.md`](docs/VALIDATION_REPORT_PHASE10.md) |
 

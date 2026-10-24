@@ -18,6 +18,11 @@ from intent_helpers import REPO, records, static_client, structural_records
 
 from app.domain.records import EvidenceRecord
 from app.intent.config import IntentConfig
+from app.intent.evaluation import (
+    evaluate_corpus,
+    load_golden_cases,
+    predictions_from_payload,
+)
 from app.intent.llm.schemas import SupersessionVerdict
 from app.intent.models import DecisionStatus, ReversalIntent, ReviewReason
 from app.intent.pipeline import IntentPipeline
@@ -650,6 +655,36 @@ class TestPhase4Firewall:
             "invalid_target_ids",
             "final_status",
         }
+
+
+class TestPhaseTenGoldenSet:
+    def test_fixture_run_scores_against_the_golden_set(self) -> None:
+        result = run()
+        cases = [
+            case
+            for case in load_golden_cases()
+            if case.corpus == "fixture"
+        ]
+        predictions = predictions_from_payload(result.as_dict())
+        report = evaluate_corpus(
+            cases=cases,
+            predictions=predictions,
+            repo=REPO,
+            corpus="fixture",
+        )
+        assert report.metrics.candidate_recall.value == 1.0
+        assert report.metrics.decision_precision.value == 1.0
+        assert report.metrics.decision_recall.value == 1.0
+        assert report.metrics.evidence_precision.value == 1.0
+        assert report.metrics.evidence_recall.value == 1.0
+        assert report.metrics.supersession_precision.value == 1.0
+        assert report.metrics.supersession_recall.value == 1.0
+        assert report.metrics.status_accuracy.value == 1.0
+        # Known baseline: the fixture proposals name the config key but not
+        # the enclosing symbol or file, so target recall is 0.5. Do not lower
+        # the golden expectation to make this green.
+        assert report.metrics.target_precision.value == 1.0
+        assert report.metrics.target_recall.value == 0.5
 
 
 def _single(payload: dict[str, Any], *, rows=None) -> Any:
