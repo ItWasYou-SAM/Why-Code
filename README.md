@@ -11,7 +11,7 @@
   <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
   <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-AuraDB-4581C3?logo=neo4j&logoColor=white" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-641%20passed-2ea44f" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-647%20passed-2ea44f" />
   <img alt="Status" src="https://img.shields.io/badge/status-backend%20pipeline-blue" />
   <img alt="Retrieval" src="https://img.shields.io/badge/retrieval-not%20built-orange" />
 </p>
@@ -117,7 +117,7 @@ ruff check app tests
 mypy app
 ```
 
-Current result: **641 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips are opt-in live-Neo4j tests.
+Current result: **647 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips are opt-in live-Neo4j tests.
 
 > `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection time. The canonical suite excludes it.
 
@@ -149,7 +149,7 @@ Current result: **641 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 │   │   ├── intent/        # Component 4  → README
 │   │   ├── retrieval/     # Component 5  (not built)
 │   │   └── main.py        # FastAPI factory; /health only
-│   ├── tests/             # 641 tests, grouped by component
+│   ├── tests/             # 647 tests, grouped by component
 │   └── README.md          # backend guide
 ├── docs/                  # decisions and validation reports
 ├── assets/readme/         # banner + screenshots

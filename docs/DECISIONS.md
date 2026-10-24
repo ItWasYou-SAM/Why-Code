@@ -1132,3 +1132,41 @@ strict schema, prompt and pair/evidence validation;
 node; `test_intent_graph_writer.py` pins the `CONFLICTS_WITH` edge.
 
 **Status.** active
+
+---
+
+## D-0046 — 2026-10-20 — Intent Phase 8: writes go through the batched graph-record writer
+
+**Decision.** Phase 8 writes the validated intent graph to Neo4j through the
+same record pattern as Component 2: the intent producer builds
+`IntentGraph` records first, integrity is asserted before the first statement,
+and the shared batched `MERGE` writer in `app.graph.batch_writer` sends the
+batch — grouped by label and relationship type, chunked at
+`DEFAULT_BATCH_SIZE`, values always parameters (`$nodes` / `$relationships`),
+never string-interpolated Cypher.
+
+The decision-shaped write contract is part of the record payload:
+
+- a `Decision` node MERGEs on its decision identity and carries `claim`,
+  `decision_type`, `status`, `rationale`, `confidence_label`,
+  `confidence_score`, `valid_from`, `valid_until`, `extracted_by` and
+  `extraction_version`;
+- a `SUPPORTED_BY` edge carries `validator_version` (the evidence-validation
+  firewall that accepted the citation) and `support_score` (the audit score the
+  acceptance produced);
+- a `GOVERNS` edge carries `linked_by` (`intent_extractor`) and `linked_at`.
+
+A dry run performs zero database operations; a real write verifies that every
+cited source record exists before the first statement and refuses to write
+otherwise. A dangling relationship aborts before any write.
+
+**Consequences.** The intent layer owns no Cypher of its own: producers emit
+transport-neutral records and the writer translates. Adding a phase-8 write
+kind means adding record fields, not adding statements.
+
+**Tests.** `tests/intent/test_intent_graph_writer.py` pins the phase-8 write
+contract, the batched parameterized merges and the dry-run/integrity behaviour;
+`tests/intent/test_intent_pipeline.py` pins that accepted intents and the
+resulting graph keep the write contract fields.
+
+**Status.** active

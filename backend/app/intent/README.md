@@ -4,7 +4,7 @@ Converts high-signal pull requests into evidence-linked engineering decisions, c
 
 This is a **pipeline, not an agent**. The model proposes one strict candidate envelope per PR; deterministic code validates every claim, citation, target and participant before anything is written.
 
-**Status:** implemented through Phase 7 (supersession and de-duplication). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository.
+**Status:** implemented through Phase 8 (supersession, de-duplication and the Neo4j intent writer). Live LLM acceptance (≥10 valid decisions on 20 high-signal PRs) has not been demonstrated in this repository.
 
 ## Pipeline
 
@@ -21,7 +21,8 @@ PR bundles
   → confidence               # fixed points, categorical output
   → de-duplication           # deterministic pairs + one LLM adjudication
   → supersession             # pairwise adjudication, later → earlier
-  → IntentGraph + review queue
+  → IntentGraph + write      # Phase 8: batched, validated records → Neo4j
+  → review queue
 ```
 
 ## Candidate detection

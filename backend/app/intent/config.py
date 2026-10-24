@@ -39,6 +39,8 @@ class IntentConfig(BaseModel):
     model: str = "gpt-4o-mini"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = Field(default="", repr=False)
+    # Phase 8 write contract: which extraction version produced the intents.
+    extraction_version: str = "1"
     temperature: float = 0.0
     seed: int = 7
     max_output_tokens: int = 2500
@@ -72,6 +74,9 @@ class IntentConfig(BaseModel):
             artifacts_dir=artifacts,
             model=source.get("WHYCODE_LLM_MODEL", "gpt-4o-mini")
             or "gpt-4o-mini",
+            extraction_version=(
+                source.get("WHYCODE_INTENT_EXTRACTION_VERSION", "1") or "1"
+            ),
             base_url=source.get(
                 "WHYCODE_LLM_BASE_URL", "https://api.openai.com/v1"
             )

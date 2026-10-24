@@ -105,7 +105,7 @@ ruff check app tests
 mypy app
 ```
 
-Current state: **641 passed, 8 skipped**, ruff clean, mypy clean over 113 source files.
+Current state: **647 passed, 8 skipped**, ruff clean, mypy clean over 113 source files.
 
 - `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection. The canonical suite excludes it.
 - The 8 skipped tests are live-Neo4j integrations. Enable them with `WHYCODE_TEST_NEO4J_URI` plus `_USER`, `_PASSWORD` and `_DATABASE`.

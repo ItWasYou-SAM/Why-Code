@@ -22,7 +22,11 @@ from app.graph.records import (
     records_from_jsonl,
     records_to_jsonl,
 )
-from app.intent.graph.intent_records import IntentGraph, build_intent_graph
+from app.intent.graph.intent_records import (
+    INTENT_VALIDATION_VERSION,
+    IntentGraph,
+    build_intent_graph,
+)
 from app.intent.graph.neo4j_writer import IntentGraphWriter
 from app.intent.models import (
     Confidence,
@@ -74,6 +78,9 @@ def make_graph() -> IntentGraph:
         claim=CLAIM,
         evidence_ids=[EVIDENCE_ID],
         confidence=Confidence.HIGH,
+        confidence_score=0.85,
+        extracted_by="gpt-4o-mini",
+        extraction_version="1",
         targets=[
             ResolvedTarget(
                 type=TargetType.SYMBOL,
@@ -144,6 +151,72 @@ class TestConflictEdges:
         assert conflicts[0].start_key == "dec_later"
         assert conflicts[0].end_key == "dec_earlier"
         assert conflicts[0].properties["reason"] == "the evidence conflicts"
+
+
+class TestPhaseEightWriteContract:
+    """Phase 8: the intent writer consumes the decision-shaped write contract."""
+
+    def test_decision_node_carries_the_phase8_write_contract(self) -> None:
+        graph = make_graph()
+        decisions = [node for node in graph.nodes if node.label == "Decision"]
+        assert len(decisions) == 1
+        node = decisions[0]
+        assert node.key == "dec_httpx_retry_limited_to_connection_errors"
+        assert node.properties["decision_id"] == node.key
+        assert node.properties["claim"] == CLAIM
+        assert node.properties["decision_type"] == "design_decision"
+        assert node.properties["status"] == "active"
+        assert "rationale" in node.properties
+        assert node.properties["confidence_label"] == "high"
+        assert node.properties["confidence_score"] == 0.85
+        assert node.properties["extracted_by"] == "gpt-4o-mini"
+        assert node.properties["extraction_version"] == "1"
+
+    def test_supported_by_edge_carries_validator_version_and_support_score(self) -> None:
+        graph = make_graph()
+        edges = [
+            rel
+            for rel in graph.relationships
+            if rel.rel_type == "SUPPORTED_BY"
+        ]
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge.start_key == "dec_httpx_retry_limited_to_connection_errors"
+        assert edge.end_key.startswith("evi_httpx_")
+        assert edge.properties["validator_version"] == INTENT_VALIDATION_VERSION
+        assert edge.properties["support_score"] == 0.85
+
+    def test_governance_edge_carries_linked_by_and_linked_at(self) -> None:
+        graph = make_graph()
+        edges = [
+            rel
+            for rel in graph.relationships
+            if rel.rel_type == "GOVERNS"
+        ]
+        assert len(edges) == 1
+        props = edges[0].properties
+        assert props["linked_by"] == "intent_extractor"
+        assert props["linked_at"]
+
+    def test_write_sends_parameterized_batch_merges_only(self) -> None:
+        session = FakeSession()
+        graph = make_graph()
+        report = IntentGraphWriter(session).write(
+            graph, repo=REPO, verify_evidence=True
+        )
+        assert report.verified is True
+        assert session.calls
+        assert "collect(DISTINCT id)" in session.calls[0][0]
+        merges = session.calls[1:]
+        assert merges
+        for query, _parameters in merges:
+            assert "MERGE" in query
+            assert "$nodes" in query or "$relationships" in query
+        node_batch = next(query for query, _ in merges if "$nodes" in query)
+        rel_batch = next(query for query, _ in merges if "$relationships" in query)
+        assert "UNWIND $nodes AS node" in node_batch
+        assert "UNWIND $relationships AS rel" in rel_batch
+        assert "node.key" in node_batch  # matched, never interpolated
 
 
 class TestDryRun:

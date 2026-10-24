@@ -218,6 +218,54 @@ class TestRunCounters:
         assert retry.temporal_scope is not None
         assert retry.temporal_scope.valid_from == "2024-04-02T06:30:45Z"
 
+    def test_intents_carry_the_phase8_write_contract(self) -> None:
+        result = run()
+        retry = next(
+            intent for intent in result.intents if intent.pr_number == 1419
+            and intent.kind.value == "decision"
+        )
+        assert retry.confidence_score > 0.0
+        assert retry.extracted_by == "gpt-4o-mini"
+        assert retry.extraction_version == "1"
+
+
+class TestPhaseEightWriteContract:
+    def test_written_graph_keeps_the_decision_write_contract(self) -> None:
+        result = run()
+        graph = result.graph
+        assert graph is not None
+        by_key = {node.key: node for node in graph.nodes}
+        decisions = [
+            by_key[intent.id]
+            for intent in result.intents
+            if intent.kind.value == "decision"
+        ]
+        assert decisions
+        for node in decisions:
+            assert node.properties["decision_id"] == node.key
+            assert node.properties["confidence_label"]
+            assert node.properties["confidence_score"] >= 0.0
+            assert node.properties["extracted_by"]
+            assert node.properties["extraction_version"]
+        supported = [
+            rel
+            for rel in graph.relationships
+            if rel.rel_type == "SUPPORTED_BY"
+        ]
+        assert supported
+        for rel in supported:
+            assert rel.properties["validator_version"]
+            assert rel.properties["support_score"] >= 0.0
+        governs = [
+            rel
+            for rel in graph.relationships
+            if rel.rel_type == "GOVERNS"
+        ]
+        assert governs
+        for rel in governs:
+            assert rel.properties["linked_by"] == "intent_extractor"
+            assert rel.properties["linked_at"]
+
 
 class TestReplay:
     def test_replaying_the_same_input_yields_the_same_ids(self) -> None:

@@ -10,6 +10,7 @@ already wrote (D-0036).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import InvalidRecordError
@@ -41,6 +42,18 @@ ROLE_REL = {
     "ADVOCATED": "ADVOCATED",
     "OBJECTED_TO": "OBJECTED_TO",
 }
+
+# Phase 8 write contract: provenance stamps for the intent graph. The
+# validator version names the evidence-validation firewall that produced the
+# acceptance verdicts backing each ``SUPPORTED_BY`` edge; the linker names the
+# component that linked an accepted intent to its governance target.
+INTENT_VALIDATION_VERSION = "phase4"
+INTENT_LINKER = "intent_extractor"
+
+
+def _linked_at() -> str:
+    """The governance link timestamp, ISO-8601 UTC (JSON-safe for the batch)."""
+    return datetime.now(UTC).isoformat()
 
 
 def intent_label(intent: IntentBase | IncidentIntent) -> str:
@@ -106,6 +119,7 @@ def build_intent_graph(
     labels_by_id = {
         intent.id: intent_label(intent) for intent in ordered_intents
     }
+    linked_at = _linked_at()
 
     graph = IntentGraph(repo=repo, intents=ordered_intents, incidents=incidents,
                         participants=participants, evidence_refs=list(evidence_refs))
@@ -191,7 +205,18 @@ def build_intent_graph(
                     component="intent",
                     record_id=intent.id,
                 )
-            add_rel("SUPPORTED_BY", intent.id, evidence_ref.node_id)
+            add_rel(
+                "SUPPORTED_BY",
+                intent.id,
+                evidence_ref.node_id,
+                {
+                    # Phase 8 write contract: the evidence link carries the
+                    # validation version that accepted the citation and the
+                    # support score the acceptance produced.
+                    "validator_version": INTENT_VALIDATION_VERSION,
+                    "support_score": intent.confidence_score,
+                },
+            )
         for target in intent.targets:
             target_label = TARGET_LABEL[target.type]
             ensure_node(target_label, target.graph_key)
@@ -199,7 +224,14 @@ def build_intent_graph(
                 "GOVERNS",
                 intent.id,
                 target.graph_key,
-                {"target_type": target.type.value, "resolution": target.resolution},
+                {
+                    "target_type": target.type.value,
+                    "resolution": target.resolution,
+                    # Phase 8 write contract: the governance link records who
+                    # performed the linking and when.
+                    "linked_by": INTENT_LINKER,
+                    "linked_at": linked_at,
+                },
             )
         for produced_key in intent.produced_in:
             produced_label = index.label_of(produced_key) or _guess_label(produced_key)
@@ -310,6 +342,14 @@ def _intent_properties(intent: IntentBase) -> dict[str, Any]:
             f"{participant.login}:{participant.role.value}"
             for participant in intent.participants_proposed
         ],
+        # Phase 8 write contract: the decision-shaped node payload. The
+        # categorical ``confidence`` label carries the display vocabulary and
+        # ``confidence_score`` the reproducible audit trail behind it; the
+        # extraction provenance names the proposal and its version.
+        "confidence_label": intent.confidence.value,
+        "confidence_score": intent.confidence_score,
+        "extracted_by": intent.extracted_by,
+        "extraction_version": intent.extraction_version,
     }
     if isinstance(intent, ConstraintIntent):
         properties["constraint_type"] = intent.constraint_type
@@ -319,6 +359,7 @@ def _intent_properties(intent: IntentBase) -> dict[str, Any]:
         properties["reverses"] = intent.reverses
     if isinstance(intent, DecisionIntent):
         properties["proposed_id"] = intent.proposed_id
+        properties["decision_id"] = intent.id
     return properties
 
 

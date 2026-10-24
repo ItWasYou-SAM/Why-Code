@@ -214,6 +214,12 @@ class IntentBase(BaseModel):
     merged_from: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
     source_candidate: str = "DECISION_CANDIDATE"
+    # Phase 8 write contract: the numeric audit trail behind the categorical
+    # ``confidence`` label, plus who produced and which extraction version
+    # accepted the proposal. They are writer inputs, never model inputs.
+    confidence_score: float = Field(default=0.0, ge=0.0, le=0.98)
+    extracted_by: str = Field(default="", max_length=200)
+    extraction_version: str = Field(default="", max_length=200)
 
     @field_validator("merged_from")
     @classmethod
