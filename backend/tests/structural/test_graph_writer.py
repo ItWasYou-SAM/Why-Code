@@ -71,6 +71,15 @@ class TestGraphRecords:
         assert region.props["file_id"].startswith("httpx:file:")
         assert region.props["content_hash"]
 
+    def test_regions_and_symbols_carry_embedding_source_text(self) -> None:
+        nodes = graph().nodes
+        region = next(node for node in nodes if node.label == "CodeRegion")
+        symbol = next(
+            node for node in nodes if node.label == "Symbol" and node.props["name"] == "Client"
+        )
+        assert region.props["excerpt"]
+        assert symbol.props["docstring"] == "A minimal client."
+
     def test_file_imports_resolvable_file(self) -> None:
         edges = [
             edge
@@ -120,6 +129,26 @@ class TestGraphRecords:
 
 
 class TestWriter:
+    def test_schema_setup_creates_retrieval_indexes(self) -> None:
+        session = FakeSession()
+        StructuralGraphWriter(session).prepare_schema()
+        queries = "\n".join(session.queries)
+        assert "CREATE FULLTEXT INDEX decision_fulltext" in queries
+        assert "CREATE VECTOR INDEX symbol_embedding" in queries
+        assert "CREATE VECTOR INDEX code_region_embedding" in queries
+
+    def test_write_attaches_embeddings_to_indexed_nodes(self) -> None:
+        session = FakeSession()
+        StructuralGraphWriter(session).write(graph(), repo=REPO)
+        embedded = [
+            entry
+            for query, parameters in session.calls
+            if "MERGE (n:Symbol" in query
+            for entry in parameters["nodes"]
+        ]
+        assert embedded
+        assert all(len(entry["properties"]["embedding"]) == 1536 for entry in embedded)
+
     def test_dry_run_performs_zero_writes(self) -> None:
         session = FakeSession()
         writer = StructuralGraphWriter(session)

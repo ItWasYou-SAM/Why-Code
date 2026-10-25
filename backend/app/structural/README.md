@@ -94,6 +94,21 @@ artifacts/structural/content_manifest.jsonl        # metadata only
 
 Each manifest row is `file_id, repo, path, commit_sha, language, content_hash, byte_size, line_count, blob_path`. The manifest doubles as a replay cache: a second run reads the blob and makes no network call. For offline replay, pass `--content-root DIR` (a checkout of the target commit).
 
+## Retrieval metadata
+
+The graph keeps only retrieval-facing text, not file content. Structural writes
+populate two fields that the vector indexes need:
+
+- `Symbol.docstring` — the first string literal in a function/class body;
+- `CodeRegion.excerpt` — a bounded excerpt of the already-fetched source span.
+
+`StructuralGraphWriter.prepare_schema()` also creates the retrieval full-text
+and vector indexes (`app/retrieval/indexes/index_manager.py`). At write time
+the writer computes an `embedding` for `Symbol`, `ConfigKey` and `CodeRegion`
+nodes; Component 4 does the same for `Decision` and `Evidence`. Embeddings are
+produced before the first merge, and an empty or malformed vector aborts the
+write.
+
 ## Validation
 
 `app/structural/validation/graph_validator.py` is the pure acceptance gate over built records:

@@ -97,6 +97,36 @@ def make_graph() -> IntentGraph:
     )
 
 
+def test_evidence_wrapper_carries_the_packer_metadata() -> None:
+    graph = make_graph()
+    evidence_nodes = [node for node in graph.nodes if node.label == "Evidence"]
+    assert len(evidence_nodes) == 1
+    props = evidence_nodes[0].properties
+    assert props["author"] == "lovelydinosaur"
+    assert props["created_at"] == "2024-03-30T09:05:00Z"
+    assert props["path"] == "httpx/_client.py"
+    assert props["start_line"] == 100
+    assert props["end_line"] == 105
+    assert props["pr_number"] == 1419
+
+
+def test_changed_file_and_commit_evidence_carry_their_details() -> None:
+    fixture = records("retry_pr_evidence.json")
+    bundle = EvidenceSelector(REPO).select(fixture)[0]
+    changed = build_evidence_ref(
+        "httpx:pr:1419:file:httpx/_client.py", bundle
+    )
+    commit = build_evidence_ref(OTHER_EVIDENCE_ID, bundle)
+    assert changed.record_type == "changed_file"
+    assert changed.path == "httpx/_client.py"
+    assert changed.excerpt.startswith("@@")
+    assert changed.pr_number == 1419
+    assert commit.record_type == "commit"
+    assert commit.commit_sha == "a" * 40
+    assert commit.author is not None
+    assert commit.occurred_at is not None
+
+
 class TestConflictEdges:
     def test_conflict_edge_keeps_both_nodes_and_writes_later_to_earlier(self) -> None:
         fixture = records("retry_pr_evidence.json")
@@ -287,6 +317,41 @@ class TestWrite:
         report = IntentGraphWriter(session).write(make_graph(), repo=REPO)
         assert report.verified is False
         assert not any("collect(DISTINCT id)" in query for query, _ in session.calls)
+
+
+class TestRetrievalSetup:
+    def test_schema_setup_creates_retrieval_indexes(self) -> None:
+        session = FakeSession()
+        IntentGraphWriter(session).prepare_schema()
+        queries = "\n".join(query for query, _ in session.calls)
+        assert "CREATE FULLTEXT INDEX decision_fulltext" in queries
+        assert "CREATE VECTOR INDEX decision_embedding" in queries
+        assert "CREATE VECTOR INDEX evidence_embedding" in queries
+
+    def test_write_embeds_decision_and_evidence_nodes(self) -> None:
+        session = FakeSession()
+        IntentGraphWriter(session).write(make_graph(), repo=REPO)
+        decision_nodes = [
+            entry
+            for query, parameters in session.calls
+            if "MERGE (n:Decision" in query
+            for entry in parameters["nodes"]
+        ]
+        evidence_nodes = [
+            entry
+            for query, parameters in session.calls
+            if "MERGE (n:Evidence" in query
+            for entry in parameters["nodes"]
+        ]
+        assert decision_nodes and evidence_nodes
+        assert all(
+            len(entry["properties"]["embedding"]) == 1536
+            for entry in decision_nodes
+        )
+        assert all(
+            len(entry["properties"]["embedding"]) == 1536
+            for entry in evidence_nodes
+        )
 
 
 class TestJsonl:

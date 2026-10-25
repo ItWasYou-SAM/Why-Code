@@ -19,6 +19,7 @@ from app.structural.extraction.config_extractor import (
 from app.structural.extraction.doc_extractor import extract_doc_mentions
 from app.structural.extraction.import_extractor import extract_imports
 from app.structural.extraction.models import (
+    CodeRegion,
     ConfigReference,
     DocMention,
     ExternalRef,
@@ -75,8 +76,11 @@ class FileExtractor:
         if handler is ExtractionHandler.CONFIG:
             keys = extract_config_keys(source, path=path, language=language)
             result.config_keys = keys
-            result.regions = regions_for_config_keys(
-                keys, repo=repo, path=path, commit_sha=commit_sha
+            result.regions = _with_excerpts(
+                regions_for_config_keys(
+                    keys, repo=repo, path=path, commit_sha=commit_sha
+                ),
+                source,
             )
             return result
 
@@ -106,11 +110,27 @@ class FileExtractor:
         result.imports = imports
         result.references = references
         result.config_references = config_references
-        result.regions = regions_for_symbols(
-            symbols, repo=repo, path=path, commit_sha=commit_sha
+        result.regions = _with_excerpts(
+            regions_for_symbols(
+                symbols, repo=repo, path=path, commit_sha=commit_sha
+            ),
+            source,
         )
         result.external_refs = _external_refs(imports, path=path)
         return result
+
+
+MAX_REGION_EXCERPT_CHARS = 2000
+
+
+def _with_excerpts(regions: list[CodeRegion], source: str) -> list[CodeRegion]:
+    """Attach a bounded, source-verifiable excerpt to each region."""
+    lines = source.splitlines()
+    for region in regions:
+        excerpt = "\n".join(lines[region.start_line - 1 : region.end_line])
+        if excerpt.strip():
+            region.excerpt = excerpt[:MAX_REGION_EXCERPT_CHARS]
+    return regions
 
 
 def _external_refs(imports: list[Any], *, path: str) -> list[ExternalRef]:

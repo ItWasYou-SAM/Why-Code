@@ -25,6 +25,15 @@ PR bundles
   → review queue
 ```
 
+## Retrieval setup
+
+`IntentGraphWriter.prepare_schema()` creates the retrieval full-text and vector
+indexes alongside the intent constraints. At write time it embeds
+`Decision.claim + rationale` and `Evidence.excerpt` into `n.embedding` before
+the batch is merged, using the same injected `EmbeddingProvider` as Component
+3. Both components run the same idempotent index sweep, so load order does not
+matter and index DDL never runs on a request.
+
 ## Candidate detection
 
 A PR reaches the model only if it clears a fixed, additive score (D-0039):
@@ -61,7 +70,7 @@ Every artifact carries an `[E#]` alias and its exact `record_id`; aliases resolv
 
 **Schema.** One `CandidateExtraction` envelope (`candidates` + `missing_evidence`) covers design decisions, constraints, reversals, incident responses, API contracts and operational policies. Enums, length limits and `additionalProperties: false` are pinned by tests. The schema has **no** `confidence`, `supersedes` or graph-key field.
 
-**Evidence.** If any cited ID is absent from the packed context, the SQLite store or the graph index, the proposal is rejected wholesale — not partially. No evidence IDs means no intent.
+**Evidence.** If any cited ID is absent from the packed context, the SQLite store or the graph index, the proposal is rejected wholesale — not partially. No evidence IDs means no intent. The `Evidence` wrapper carries the source author, occurrence date, path/line span, commit SHA and issue number; a changed file's excerpt is its patch. The retrieval evidence packer uses those fields for attribution and diff context (D-0054).
 
 **Rules (D-0041).**
 
@@ -194,6 +203,22 @@ PYTHONPATH=. python -m app.intent.cli evaluate \
   --out ../artifacts/intent/evaluation_report.json
 ```
 
+## Provider quota (D-0049)
+
+`llm/limits.py` wraps every provider in `RateLimitedProvider`. It paces calls
+to the published request rate, refuses a single request that cannot fit the
+per-minute token cap, and stops once a daily ceiling is reached. Requests and
+tokens are counted per model and UTC day in
+`$WHYCODE_ARTIFACTS_DIR/intent/llm_budget.json`, so a short-lived CLI run cannot
+reset the budget by restarting.
+
+The defaults are Groq's dev-plan caps for `openai/gpt-oss-20b` (30 req/min,
+1K req/day, 8K tokens/min, 200K tokens/day). `WHYCODE_LLM_BUDGET_REQUESTS` and
+`WHYCODE_LLM_BUDGET_TOKENS` set a lower daily ceiling for test runs; a value
+above the provider cap is rejected. A blocked call raises
+`QuotaExceededError` before any network traffic. The live smoke test is opt-in
+(`WHYCODE_TEST_LLM=1`) and spends exactly one request.
+
 ## Layout
 
 ```text
@@ -220,3 +245,5 @@ PYTHONPATH=. python -m pytest tests/intent -q
 `tests/intent/test_evaluation.py` pins the golden-set shape, metric formulas,
 null-vs-zero honesty and the `evaluate` CLI. `tests/intent/test_intent_pipeline.py`
 scores a real fixture run and records the target-recall gap described above.
+`tests/intent/test_llm_limits.py` and `test_llm_provider.py` cover the quota
+guard and the HTTP payload offline; `test_llm_live.py` is the opt-in live call.

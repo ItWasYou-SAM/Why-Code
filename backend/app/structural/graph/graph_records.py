@@ -144,6 +144,7 @@ class _Builder:
                     "parent_qualname": symbol.parent_qualname,
                     "decorators": symbol.decorators,
                     "is_async": symbol.is_async,
+                    "docstring": symbol.docstring,
                 },
             )
             self._symbols_by_qualname.setdefault(
@@ -164,6 +165,7 @@ class _Builder:
                     "kind": region.kind,
                     "source": "definition",
                     "content_hash": entry.content_hash,
+                    "excerpt": region.excerpt,
                 },
             )
             self._edge("HAS_REGION", fid, region.region_id)

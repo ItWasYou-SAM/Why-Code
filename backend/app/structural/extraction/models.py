@@ -69,6 +69,9 @@ class Symbol(_Model):
     parent_qualname: str | None = None
     decorators: list[str] = Field(default_factory=list)
     is_async: bool = False
+    # Retrieval embeds the qualified name plus the docstring. The docstring is
+    # syntax, not inference: it is the first string literal in the body.
+    docstring: str | None = None
 
     @property
     def qualified_name(self) -> str:
@@ -127,6 +130,9 @@ class CodeRegion(_Model):
     kind: str
     symbol_qualname: str | None = None
     config_key: str | None = None
+    # Retrieval embeds this span. It is derived from the already-fetched
+    # content and is capped when written to the graph.
+    excerpt: str | None = None
 
 
 class Reference(_Model):

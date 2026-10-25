@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from app.intent.llm.limits import ProviderLimits
 
 
 class IntentConfig(BaseModel):
@@ -39,6 +43,18 @@ class IntentConfig(BaseModel):
     model: str = "gpt-4o-mini"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = Field(default="", repr=False)
+    # Groq's gpt-oss models accept low/medium/high; reasoning tokens are
+    # billed as output, so tests pin "low" to stretch the daily budget.
+    reasoning_effort: str | None = None
+    # Provider caps (defaults: Groq dev plan, openai/gpt-oss-20b/120b).
+    requests_per_minute: int = 30
+    requests_per_day: int = 1000
+    tokens_per_minute: int = 8000
+    tokens_per_day: int = 200_000
+    # Optional, stricter self-imposed daily ceilings. None = provider cap.
+    budget_requests_per_day: int | None = None
+    budget_tokens_per_day: int | None = None
+    budget_file: Path | None = None
     # Phase 8 write contract: which extraction version produced the intents.
     extraction_version: str = "1"
     temperature: float = 0.0
@@ -69,6 +85,7 @@ class IntentConfig(BaseModel):
             artifacts_dir
             or source.get("WHYCODE_ARTIFACTS_DIR", "artifacts")
         )
+        budget_file = source.get("WHYCODE_LLM_BUDGET_FILE", "").strip()
         return cls(
             repo=repo,
             artifacts_dir=artifacts,
@@ -82,6 +99,28 @@ class IntentConfig(BaseModel):
             )
             or "https://api.openai.com/v1",
             api_key=source.get("WHYCODE_LLM_API_KEY", ""),
+            reasoning_effort=(
+                source.get("WHYCODE_LLM_REASONING_EFFORT", "").strip() or None
+            ),
+            requests_per_minute=_positive_int(
+                source.get("WHYCODE_LLM_RPM"), 30
+            ),
+            requests_per_day=_positive_int(
+                source.get("WHYCODE_LLM_RPD"), 1000
+            ),
+            tokens_per_minute=_positive_int(
+                source.get("WHYCODE_LLM_TPM"), 8000
+            ),
+            tokens_per_day=_positive_int(
+                source.get("WHYCODE_LLM_TPD"), 200_000
+            ),
+            budget_requests_per_day=_optional_int(
+                source.get("WHYCODE_LLM_BUDGET_REQUESTS")
+            ),
+            budget_tokens_per_day=_optional_int(
+                source.get("WHYCODE_LLM_BUDGET_TOKENS")
+            ),
+            budget_file=Path(budget_file) if budget_file else None,
             temperature=float(source.get("WHYCODE_LLM_TEMPERATURE", "0") or "0"),
             seed=int(source.get("WHYCODE_LLM_SEED", "7") or "7"),
             max_output_tokens=int(
@@ -104,6 +143,34 @@ class IntentConfig(BaseModel):
 
     def resolve_intent_dir(self) -> Path:
         return self.intent_dir or self.artifacts_dir / "intent"
+
+    def resolve_budget_file(self) -> Path:
+        """Where the daily LLM quota ledger lives."""
+        return self.budget_file or self.artifacts_dir / "intent" / "llm_budget.json"
+
+    def limits(self) -> ProviderLimits:
+        """The published caps plus this run's tighter daily ceilings."""
+        from app.intent.llm.limits import ProviderLimits
+
+        return ProviderLimits(
+            requests_per_minute=self.requests_per_minute,
+            requests_per_day=self.requests_per_day,
+            tokens_per_minute=self.tokens_per_minute,
+            tokens_per_day=self.tokens_per_day,
+            min_interval_seconds=60.0 / self.requests_per_minute,
+            max_requests_per_day=self.budget_requests_per_day,
+            max_tokens_per_day=self.budget_tokens_per_day,
+        )
+
+
+def _positive_int(raw: str | None, default: int) -> int:
+    value = (raw or "").strip()
+    return int(value) if value else default
+
+
+def _optional_int(raw: str | None) -> int | None:
+    value = (raw or "").strip()
+    return int(value) if value else None
 
 
 __all__ = ["IntentConfig"]

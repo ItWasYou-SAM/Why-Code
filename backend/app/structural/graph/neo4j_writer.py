@@ -12,6 +12,13 @@ from typing import Any, Protocol
 
 from app.core.errors import GraphWriteError
 from app.graph.batch_writer import DEFAULT_BATCH_SIZE, record_statements, write_records
+from app.retrieval.config import RetrievalConfig
+from app.retrieval.indexes.embeddings import (
+    HashingEmbeddingProvider,
+    embed_graph_records,
+)
+from app.retrieval.indexes.index_manager import IndexManager
+from app.retrieval.ports import EmbeddingProvider
 from app.structural.graph.cypher_templates import (
     STRUCTURAL_LABELS,
     delete_statement,
@@ -36,14 +43,27 @@ class WriteReport:
 
 class StructuralGraphWriter:
     def __init__(
-        self, session: SessionLike, *, batch_size: int = DEFAULT_BATCH_SIZE
+        self,
+        session: SessionLike,
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        index_config: RetrievalConfig | None = None,
+        embedder: EmbeddingProvider | None = None,
     ) -> None:
         self.session = session
         self.batch_size = batch_size
+        self.index_config = index_config or RetrievalConfig()
+        self.embedder = embedder or HashingEmbeddingProvider(
+            self.index_config.embedding_dimensions
+        )
 
     def prepare_schema(self) -> None:
         for statement in schema_statements(STRUCTURAL_LABELS):
             self.session.run(statement)
+        # Retrieval indexes belong to setup, not the request path. Both
+        # structural and intent writes call the same idempotent sweep so a
+        # graph loaded in either order ends up with the same indexes.
+        IndexManager(self.index_config).ensure(self.session)
 
     def write(self, graph: StructuralGraph, *, repo: str, dry_run: bool = False) -> WriteReport:
         graph.assert_integrity()
@@ -54,8 +74,14 @@ class StructuralGraphWriter:
         if dry_run:
             return report
         try:
+            records = embed_graph_records(
+                graph.to_records(),
+                embedder=self.embedder,
+                dimensions=self.index_config.embedding_dimensions,
+                max_text_chars=self.index_config.max_embedding_chars,
+            )
             write_records(
-                self.session, graph.to_records(), batch_size=self.batch_size
+                self.session, records, batch_size=self.batch_size
             )
         except Exception as error:  # noqa: BLE001
             if isinstance(error, GraphWriteError):

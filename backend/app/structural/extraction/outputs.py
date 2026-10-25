@@ -85,6 +85,7 @@ def _symbols(entry: StructuralFile) -> list[ExtractedSymbol]:
             kind=_SYMBOL_KINDS[symbol.kind],
             start_line=symbol.start_line,
             end_line=symbol.end_line,
+            docstring=symbol.docstring,
             parent_symbol_id=(
                 by_qualname.get(symbol.parent_qualname)
                 if symbol.parent_qualname
@@ -200,7 +201,7 @@ def _regions(entry: StructuralFile) -> list[ExtractedCodeRegion]:
                 start_line=region.start_line,
                 end_line=region.end_line,
                 content_hash=entry.content_hash,
-                excerpt=None,
+                excerpt=region.excerpt,
                 symbol_id=(
                     by_qualname.get(region.symbol_qualname)
                     if region.symbol_qualname

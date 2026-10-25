@@ -21,6 +21,13 @@ from app.intent.graph.cypher_templates import (
 )
 from app.intent.graph.intent_records import IntentGraph
 from app.intent.validation.supersession import StatusUpdate
+from app.retrieval.config import RetrievalConfig
+from app.retrieval.indexes.embeddings import (
+    HashingEmbeddingProvider,
+    embed_graph_records,
+)
+from app.retrieval.indexes.index_manager import IndexManager
+from app.retrieval.ports import EmbeddingProvider
 
 
 class SessionLike(Protocol):
@@ -45,14 +52,26 @@ class WriteReport:
 
 class IntentGraphWriter:
     def __init__(
-        self, session: SessionLike, *, batch_size: int = DEFAULT_BATCH_SIZE
+        self,
+        session: SessionLike,
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        index_config: RetrievalConfig | None = None,
+        embedder: EmbeddingProvider | None = None,
     ) -> None:
         self.session = session
         self.batch_size = batch_size
+        self.index_config = index_config or RetrievalConfig()
+        self.embedder = embedder or HashingEmbeddingProvider(
+            self.index_config.embedding_dimensions
+        )
 
     def prepare_schema(self) -> None:
         for statement in schema_statements(INTENT_LABELS):
             self.session.run(statement)
+        # The same idempotent retrieval-index sweep as Component 3. Intent
+        # setup may run first, so it creates the structural indexes too.
+        IndexManager(self.index_config).ensure(self.session)
 
     def write(
         self,
@@ -82,7 +101,13 @@ class IntentGraphWriter:
                 )
             report.verified = True
         try:
-            write_records(self.session, graph.to_records(), batch_size=self.batch_size)
+            records = embed_graph_records(
+                graph.to_records(),
+                embedder=self.embedder,
+                dimensions=self.index_config.embedding_dimensions,
+                max_text_chars=self.index_config.max_embedding_chars,
+            )
+            write_records(self.session, records, batch_size=self.batch_size)
         except Exception as error:  # noqa: BLE001 - re-raised with taxonomy
             if isinstance(error, GraphWriteError):
                 raise

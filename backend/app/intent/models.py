@@ -90,6 +90,13 @@ class EvidenceRef(BaseModel):
     record_type: str = Field(min_length=1)
     source_record_id: str = Field(min_length=1)
     pr_number: int | None = None
+    issue_number: int | None = None
+    commit_sha: str | None = None
+    author: str | None = None
+    occurred_at: str | None = None
+    path: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
     excerpt: str = ""
     url: str | None = None
     content_hash: str | None = None

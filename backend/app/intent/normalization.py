@@ -8,6 +8,8 @@ contribution.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.intent.config import IntentConfig
 from app.intent.ids import evidence_node_id, intent_id
 from app.intent.llm.schemas import ExtractedCandidate
@@ -117,14 +119,25 @@ def build_evidence_ref(
 ) -> EvidenceRef:
     item = bundle.item(evidence_id)
     if item is not None:
-        excerpt = item.text[:_EXCERPT_LIMIT]
+        payload = item.payload
+        if item.record_type == "changed_file":
+            excerpt = _payload_text(payload.get("patch")) or ""
+        else:
+            excerpt = item.text
         return EvidenceRef(
             evidence_id=evidence_id,
             node_id=evidence_node_id(repo=bundle.repo, evidence_id=evidence_id),
             record_type=item.record_type,
             source_record_id=item.record_id,
             pr_number=item.pr_number,
-            excerpt=excerpt,
+            issue_number=_issue_number(item.record_type, payload),
+            commit_sha=_payload_text(payload.get("sha")),
+            author=item.author,
+            occurred_at=item.occurred_at or None,
+            path=_payload_text(payload.get("path")),
+            start_line=_positive_int(payload.get("start_line")),
+            end_line=_positive_int(payload.get("line")),
+            excerpt=excerpt[:_EXCERPT_LIMIT],
             url=item.url,
             content_hash=item.content_hash,
         )
@@ -135,6 +148,25 @@ def build_evidence_ref(
         source_record_id=evidence_id,
         pr_number=bundle.pr_number,
     )
+
+
+def _payload_text(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _positive_int(value: object) -> int | None:
+    return value if isinstance(value, int) and value > 0 else None
+
+
+def _issue_number(
+    record_type: str, payload: Mapping[str, object]
+) -> int | None:
+    value = payload.get("issue_number")
+    if value is None and record_type == "issue":
+        value = payload.get("number")
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 def _proposed_targets(proposal: ExtractedCandidate) -> list[str]:

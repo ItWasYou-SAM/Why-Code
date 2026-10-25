@@ -11,6 +11,7 @@ declaration is covered whole.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -101,6 +102,26 @@ def _decorators(declaration: Any, source: bytes) -> list[str]:
         for child in declaration.children
         if child.type == "decorator"
     ]
+
+
+def _docstring(node: Any, source: bytes) -> str | None:
+    """The first string literal in a function/class body, if present."""
+    body = node.child_by_field_name("body")
+    if body is None or body.named_child_count == 0:
+        return None
+    first = body.named_child(0)
+    if first is None or first.type != "expression_statement":
+        return None
+    expression = first.named_child(0)
+    if expression is None or expression.type != "string":
+        return None
+    try:
+        value = ast.literal_eval(_text(expression, source))
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
 
 
 def _is_local(node: Any) -> bool:
@@ -244,6 +265,7 @@ def extract_symbols(
                 parent_qualname=definition.parent_qualname,
                 decorators=definition.decorators,
                 is_async=definition.is_async,
+                docstring=_docstring(definition.node, source),
             )
         )
 

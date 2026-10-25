@@ -56,6 +56,11 @@ class TestSymbols:
         assert found["Client.send"].parent_qualname == "Client"
         assert found["build_client"].parent_qualname is None
 
+    def test_docstrings_are_captured_from_the_definition_body(self) -> None:
+        found = by_qualname()
+        assert found["Client"].docstring == "A minimal client."
+        assert found["Client.send"].docstring is None
+
     def test_no_duplicate_symbol_ids(self) -> None:
         ids = [symbol.symbol_id for symbol in symbols()]
         assert len(ids) == len(set(ids))

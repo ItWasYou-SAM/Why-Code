@@ -47,6 +47,15 @@ class RateLimitError(AppError):
     """An upstream API refused the request because a quota was exhausted."""
 
 
+class QuotaExceededError(AppError):
+    """A locally enforced quota would be crossed; no request was sent.
+
+    Distinct from :class:`RateLimitError`, which means the provider already
+    refused a call. This one is raised by our own budget guard and is
+    therefore never retried.
+    """
+
+
 class InvalidRecordError(AppError):
     """A record is malformed, or violates an integrity rule."""
 
