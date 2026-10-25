@@ -188,7 +188,7 @@ class EvidenceValidator:
         evidence_items = [
             item
             for evidence_id in evidence.accepted_ids
-            if (item := bundle.item(evidence_id)) is not None
+            if (item := bundle.items_by_id().get(evidence_id)) is not None
         ]
 
         if evidence.ok:

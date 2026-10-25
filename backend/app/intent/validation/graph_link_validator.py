@@ -30,6 +30,13 @@ from app.structural.extraction.ids import region_id as structural_region_id
 
 RecordLike = EvidenceRecord | dict[str, Any]
 
+_TARGET_TYPES = {
+    "file": TargetType.FILE,
+    "symbol": TargetType.SYMBOL,
+    "config_key": TargetType.CONFIG_KEY,
+    "code_region": TargetType.CODE_REGION,
+}
+
 
 @dataclass(frozen=True)
 class TargetResolution:
@@ -295,9 +302,6 @@ class GraphIndex:
     def has_node(self, key: str) -> bool:
         return key in self.node_ids
 
-    def label_of(self, key: str) -> str | None:
-        return self.node_labels.get(key)
-
     def options(self) -> list[TargetOption]:
         return [self._options[key] for key in sorted(self._options)]
 
@@ -396,7 +400,7 @@ class GraphLinkValidator:
         result = TargetValidation()
         seen: set[str] = set()
         for target in proposed:
-            target_type = _target_type(target.target_type)
+            target_type = _TARGET_TYPES.get(target.target_type)
             if target_type is None:
                 result.issues.append(
                     f"unknown target type {target.target_type!r}"
@@ -454,15 +458,6 @@ def _string(value: Any) -> str | None:
 
 def _int(value: Any) -> int | None:
     return value if isinstance(value, int) else None
-
-
-def _target_type(value: str) -> TargetType | None:
-    return {
-        "file": TargetType.FILE,
-        "symbol": TargetType.SYMBOL,
-        "config_key": TargetType.CONFIG_KEY,
-        "code_region": TargetType.CODE_REGION,
-    }.get(value)
 
 
 __all__ = [

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import InvalidRecordError
-from app.graph.records import GraphNode, GraphRecords, GraphRelationship
+from app.graph.records import GraphNode, GraphRecords, GraphRelationship, count_records
 from app.intent.models import (
     ConstraintIntent,
     DecisionIntent,
@@ -81,13 +81,7 @@ class IntentGraph:
         return {node.key for node in self.nodes}
 
     def counts(self) -> dict[str, dict[str, int]]:
-        nodes: dict[str, int] = {}
-        rels: dict[str, int] = {}
-        for node in self.nodes:
-            nodes[node.label] = nodes.get(node.label, 0) + 1
-        for rel in self.relationships:
-            rels[rel.rel_type] = rels.get(rel.rel_type, 0) + 1
-        return {"nodes": nodes, "rels": rels}
+        return count_records(self.nodes, self.relationships)
 
     def to_records(self) -> GraphRecords:
         records = GraphRecords(nodes=list(self.nodes), relationships=list(self.relationships))
@@ -175,7 +169,7 @@ def build_intent_graph(
             },
         )
         if index.has_node(ref.source_record_id):
-            label = index.label_of(ref.source_record_id)
+            label = index.node_labels.get(ref.source_record_id)
             if label:
                 ensure_node(label, ref.source_record_id)
                 add_rel("REPRESENTS", ref.node_id, ref.source_record_id)
@@ -241,7 +235,7 @@ def build_intent_graph(
                 },
             )
         for produced_key in intent.produced_in:
-            produced_label = index.label_of(produced_key) or _guess_label(produced_key)
+            produced_label = index.node_labels.get(produced_key) or _guess_label(produced_key)
             ensure_node(produced_label, produced_key)
             add_rel("PRODUCED_IN", intent.id, produced_key)
         for incident_id in sorted(
@@ -390,7 +384,7 @@ def _label_for_target_type(target_type: str, index: GraphIndex) -> str:
     try:
         return TARGET_LABEL[TargetType(target_type)]
     except ValueError:
-        label = index.label_of(target_type)
+        label = index.node_labels.get(target_type)
         if label:
             return label
         raise InvalidRecordError(

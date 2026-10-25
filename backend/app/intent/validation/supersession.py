@@ -29,6 +29,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from itertools import combinations
 
+from app.intent.edge_utils import dedupe_edges
 from app.intent.llm.schemas import (
     SupersessionRelationshipLiteral,
     SupersessionVerdict,
@@ -412,7 +413,7 @@ class SupersessionDetector:
         ]
         return SupersessionResult(
             intents=updated_intents,
-            edges=_dedupe_edges(edges),
+            edges=dedupe_edges(edges),
             status_updates=status_updates,
             candidates=candidates,
             decisions=decisions_out,
@@ -741,18 +742,6 @@ def _apply_reversal_links(
         else:
             updated.append(intent)
     return updated
-
-
-def _dedupe_edges(edges: list[SupersessionEdge]) -> list[SupersessionEdge]:
-    seen: set[tuple[str, str, str]] = set()
-    unique: list[SupersessionEdge] = []
-    for edge in edges:
-        key = (edge.rel_type, edge.start_id, edge.end_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(edge)
-    return unique
 
 
 __all__ = [

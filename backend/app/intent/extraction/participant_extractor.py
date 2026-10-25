@@ -110,7 +110,7 @@ class ParticipantExtractor:
         # Stance is only considered for evidence the validated intent cites.
         for intent in intents:
             for evidence_id in intent.evidence_ids:
-                item = bundle.item(evidence_id)
+                item = bundle.items_by_id().get(evidence_id)
                 if item is None:
                     continue
                 role = _stance(item)

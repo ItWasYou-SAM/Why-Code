@@ -11,13 +11,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-_REQUIRED = {
-    "github_token": "WHYCODE_GITHUB_TOKEN",
-    "neo4j_uri": "WHYCODE_NEO4J_URI",
-    "neo4j_user": "WHYCODE_NEO4J_USER",
-    "neo4j_password": "WHYCODE_NEO4J_PASSWORD",
-    "llm_api_key": "WHYCODE_LLM_API_KEY",
-}
+_ENV_PREFIX = "WHYCODE_"
+_REQUIRED_FIELDS = (
+    "github_token",
+    "neo4j_uri",
+    "neo4j_user",
+    "neo4j_password",
+    "llm_api_key",
+)
 
 
 class Settings(BaseModel):
@@ -39,7 +40,8 @@ class Settings(BaseModel):
         source = os.environ if env is None else env
         missing: list[str] = []
         found: dict[str, str] = {}
-        for field_name, env_name in _REQUIRED.items():
+        for field_name in _REQUIRED_FIELDS:
+            env_name = f"{_ENV_PREFIX}{field_name.upper()}"
             value = source.get(env_name, "").strip()
             if not value:
                 missing.append(env_name)
