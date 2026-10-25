@@ -111,9 +111,6 @@ class PrEvidenceBundle:
     def evidence_ids(self) -> list[str]:
         return sorted(self.items_by_id())
 
-    def item(self, record_id: str) -> EvidenceItem | None:
-        return self.items_by_id().get(record_id)
-
     def changed_paths(self) -> set[str]:
         return {
             str(item.payload.get("path"))

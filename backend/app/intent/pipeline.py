@@ -575,7 +575,7 @@ class IntentPipeline:
         evidence_items = [
             item
             for evidence_id in validation.evidence.accepted_ids
-            if (item := bundle.item(evidence_id)) is not None
+            if (item := bundle.items_by_id().get(evidence_id)) is not None
         ]
         # Phase 4 has already rejected a candidate with no resolvable target
         # and downgraded a partial set to an observation. The rule gate only

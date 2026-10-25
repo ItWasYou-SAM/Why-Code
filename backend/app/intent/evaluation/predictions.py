@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.errors import InvalidRecordError
+from app.intent.edge_utils import dedupe_edges
 from app.intent.evaluation.models import (
     PredictedDecision,
     PredictedEdge,
@@ -199,19 +200,7 @@ def _edges(payload: dict[str, Any]) -> list[PredictedEdge]:
             edges.append(
                 PredictedEdge(rel_type=rel_type, start_id=start, end_id=end)
             )
-    return _deduplicate_edges(edges)
-
-
-def _deduplicate_edges(edges: list[PredictedEdge]) -> list[PredictedEdge]:
-    seen: set[tuple[str, str, str]] = set()
-    unique: list[PredictedEdge] = []
-    for edge in edges:
-        key = (edge.rel_type, edge.start_id, edge.end_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(edge)
-    return unique
+    return dedupe_edges(edges)
 
 
 def _refusals(payload: dict[str, Any]) -> tuple[set[int], bool]:

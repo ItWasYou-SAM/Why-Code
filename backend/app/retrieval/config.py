@@ -9,7 +9,7 @@ deterministic question understanding must work without an API key.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -162,24 +162,27 @@ class RetrievalConfig(BaseModel):
         )
 
 
-def _env_int(source: Mapping[str, str], name: str, default: int) -> int:
+def _env_number[Number: (int, float)](
+    source: Mapping[str, str],
+    name: str,
+    default: Number,
+    convert: Callable[[str], Number],
+) -> Number:
     value = source.get(name, "").strip()
     if not value:
         return default
     try:
-        return int(value)
+        return convert(value)
     except ValueError:
         return default
+
+
+def _env_int(source: Mapping[str, str], name: str, default: int) -> int:
+    return _env_number(source, name, default, int)
 
 
 def _env_float(source: Mapping[str, str], name: str, default: float) -> float:
-    value = source.get(name, "").strip()
-    if not value:
-        return default
-    try:
-        return float(value)
-    except ValueError:
-        return default
+    return _env_number(source, name, default, float)
 
 
 def _env_bool(source: Mapping[str, str], name: str, default: bool) -> bool:

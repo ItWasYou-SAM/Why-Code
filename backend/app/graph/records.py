@@ -99,6 +99,20 @@ class GraphRelationship(BaseModel):
         return self.properties
 
 
+def count_records(
+    nodes: Iterable[GraphNode], relationships: Iterable[GraphRelationship]
+) -> dict[str, dict[str, int]]:
+    """Count nodes by label and relationships by type."""
+
+    node_counts: dict[str, int] = {}
+    rel_counts: dict[str, int] = {}
+    for node in nodes:
+        node_counts[node.label] = node_counts.get(node.label, 0) + 1
+    for rel in relationships:
+        rel_counts[rel.rel_type] = rel_counts.get(rel.rel_type, 0) + 1
+    return {"nodes": node_counts, "rels": rel_counts}
+
+
 class GraphRecords(BaseModel):
     """A complete, self-contained batch of nodes and relationships."""
 
@@ -111,13 +125,7 @@ class GraphRecords(BaseModel):
         return {node.key for node in self.nodes}
 
     def counts(self) -> dict[str, dict[str, int]]:
-        nodes: dict[str, int] = {}
-        rels: dict[str, int] = {}
-        for node in self.nodes:
-            nodes[node.label] = nodes.get(node.label, 0) + 1
-        for rel in self.relationships:
-            rels[rel.rel_type] = rels.get(rel.rel_type, 0) + 1
-        return {"nodes": nodes, "rels": rels}
+        return count_records(self.nodes, self.relationships)
 
     def assert_integrity(self) -> None:
         known: set[str] = set()

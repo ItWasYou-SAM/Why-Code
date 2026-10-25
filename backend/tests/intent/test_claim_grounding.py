@@ -32,7 +32,7 @@ def ground(
 ):
     current = bundle()
     ids = evidence_ids or [RETRY_COMMENT, RETRY_COMMIT, RETRY_DIFF]
-    items = [current.item(evidence_id) for evidence_id in ids]
+    items = [current.items_by_id().get(evidence_id) for evidence_id in ids]
     return ClaimGrounder().ground(
         claim,
         rationale,
@@ -198,7 +198,7 @@ class TestConflictGrounding:
         result = ClaimGrounder().ground(
             "Retries are limited to connection errors.",
             "",
-            [current.item(RETRY_COMMENT), synthetic],
+            [current.items_by_id().get(RETRY_COMMENT), synthetic],
             valid_from="2024-04-02T06:30:45Z",
             reference_items=[current.pr],
         )

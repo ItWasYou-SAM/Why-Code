@@ -117,7 +117,7 @@ class IntentNormalizer:
 def build_evidence_ref(
     evidence_id: str, bundle: PrEvidenceBundle
 ) -> EvidenceRef:
-    item = bundle.item(evidence_id)
+    item = bundle.items_by_id().get(evidence_id)
     if item is not None:
         payload = item.payload
         if item.record_type == "changed_file":

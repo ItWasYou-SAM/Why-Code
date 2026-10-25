@@ -459,12 +459,12 @@ def _target_ref(value: Any) -> str | None:
     mapping = _mapping(value)
     if mapping is not None and "node" in mapping:
         node = mapping.get("node")
-        labels = _labels(mapping.get("labels"))
+        labels = _strings(mapping.get("labels"))
     props = _mapping(node)
     if props is None:
         return None
     if not labels:
-        labels = _labels(props.get("labels"))
+        labels = _strings(props.get("labels"))
     label = labels[0] if labels else _infer_label(props)
     identifier = _target_identifier(label, props)
     return f"{label}:{identifier}" if identifier else None
@@ -586,10 +586,6 @@ def _strings(value: Any) -> list[str]:
         if text is not None:
             result.append(text)
     return result
-
-
-def _labels(value: Any) -> list[str]:
-    return _strings(value)
 
 
 def _int_or_none(value: Any) -> int | None:

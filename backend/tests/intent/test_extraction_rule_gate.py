@@ -44,7 +44,7 @@ def candidate(**overrides) -> ExtractedCandidate:
 def validate(model: ExtractedCandidate, *, evidence_ids=None, target_validation=None):
     current = bundle()
     items = [
-        current.item(evidence_id)
+        current.items_by_id().get(evidence_id)
         for evidence_id in (evidence_ids or model.evidence_ids)
     ]
     return ExtractionRuleValidator().validate(
@@ -108,7 +108,7 @@ class TestPrStateRule:
         result = ExtractionRuleValidator().validate(
             model,
             bundle=unmerged,
-            evidence_items=[current.item(RETRY_COMMENT)],
+            evidence_items=[current.items_by_id().get(RETRY_COMMENT)],
             target_validation=TargetValidation(),
         )
         assert result.ok
