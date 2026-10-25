@@ -1,0 +1,184 @@
+[
+  {
+    "case_id": "retry_default_config_why",
+    "question": "Why are retries disabled by default in httpx?",
+    "question_type": "CONFIG_WHY",
+    "contains_graph_keys": [
+      "httpx:config:httpx/_config.py:retries"
+    ],
+    "entity_types": [
+      "config_key"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "config_key",
+        "text": "retries",
+        "normalized": "retry.max_attempts"
+      }
+    ]
+  },
+  {
+    "case_id": "retry_limit_config_why",
+    "question": "Why is the retry limit three?",
+    "question_type": "CONFIG_WHY",
+    "contains_graph_keys": [
+      "httpx:config:httpx/_config.py:retry.max_attempts"
+    ],
+    "entity_types": [
+      "config_key"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "config_key",
+        "text": "retry limit",
+        "normalized": "retry.max_attempts"
+      }
+    ]
+  },
+  {
+    "case_id": "client_send_code_why",
+    "question": "Why does Client.send not retry requests?",
+    "question_type": "CODE_WHY",
+    "contains_graph_keys": [
+      "httpx:symbol:httpx/_client.py@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:Client.send"
+    ],
+    "entity_types": [
+      "symbol"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "symbol",
+        "text": "Client.send",
+        "normalized": "Client.send"
+      }
+    ]
+  },
+  {
+    "case_id": "retry_default_changed",
+    "question": "Why was the retry default changed?",
+    "question_type": "DECISION_HISTORY",
+    "contains_graph_keys": [
+      "httpx:decision:retry-default-disabled"
+    ],
+    "entity_types": [
+      "decision"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": []
+  },
+  {
+    "case_id": "retry_ownership",
+    "question": "Who should I ask about retries?",
+    "question_type": "OWNERSHIP",
+    "contains_graph_keys": [
+      "httpx:config:httpx/_config.py:retries"
+    ],
+    "entity_types": [
+      "config_key"
+    ],
+    "requires_supersession_check": false,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "config_key",
+        "text": "retries",
+        "normalized": "retry.max_attempts"
+      }
+    ]
+  },
+  {
+    "case_id": "retry_reversed",
+    "question": "Was the retry approach ever revised or reversed?",
+    "question_type": "SUPERSESSION",
+    "contains_graph_keys": [
+      "httpx:decision:retry-behaviour-reversed"
+    ],
+    "entity_types": [
+      "decision"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": []
+  },
+  {
+    "case_id": "authentication_general",
+    "question": "How does authentication work?",
+    "question_type": "GENERAL_CODE_QUESTION",
+    "contains_graph_keys": [],
+    "entity_types": [],
+    "requires_supersession_check": false,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": []
+  },
+  {
+    "case_id": "purple_logo_refusal",
+    "question": "Why does httpx use a purple logo?",
+    "question_type": "GENERAL_CODE_QUESTION",
+    "contains_graph_keys": [],
+    "entity_types": [],
+    "requires_supersession_check": false,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": []
+  },
+  {
+    "case_id": "retries_before_2024",
+    "question": "Why were retries limited before 2024?",
+    "question_type": "CONFIG_WHY",
+    "contains_graph_keys": [
+      "httpx:config:httpx/_config.py:retries"
+    ],
+    "entity_types": [
+      "config_key"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": {
+      "kind": "before",
+      "start": null,
+      "end": "2023-12-31"
+    },
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "config_key",
+        "text": "retries",
+        "normalized": "retry.max_attempts"
+      }
+    ]
+  },
+  {
+    "case_id": "separate_timeouts",
+    "question": "Why does the client use separate connect, read, write, and pool timeouts?",
+    "question_type": "CONFIG_WHY",
+    "contains_graph_keys": [
+      "httpx:config:httpx/_config.py:timeout"
+    ],
+    "entity_types": [
+      "config_key"
+    ],
+    "requires_supersession_check": true,
+    "time_constraint": null,
+    "extraction_method": "deterministic",
+    "entities": [
+      {
+        "type": "config_key",
+        "text": "timeouts",
+        "normalized": "timeout"
+      }
+    ]
+  }
+]

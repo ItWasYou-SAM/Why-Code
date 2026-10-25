@@ -2,7 +2,7 @@
 
 FastAPI + SQLite + Neo4j backend for **WhyCode**. It ingests a repository's GitHub history, builds an evidence graph, enriches it with structural data and extracts evidence-linked decisions.
 
-The retrieval/answer service (Component 5) is not built yet; the graph and extraction layers it will consume are.
+The retrieval/answer service (Component 5) is built as a fixed pipeline over an injectable Neo4j backend. The read-only `Neo4jGraphBackend` adapter and its lookup methods are included; wiring an application process to a live database is deployment work.
 
 For the project overview, screenshots and built-vs-planned table, see the [root README](../README.md).
 
@@ -15,7 +15,7 @@ For the project overview, screenshots and built-vs-planned table, see the [root 
 | 2 · Neo4j graph builder | [`app/graph/README.md`](app/graph/README.md) |
 | 3 · Structural enricher | [`app/structural/README.md`](app/structural/README.md) |
 | 4 · Decision extractor | [`app/intent/README.md`](app/intent/README.md) |
-| 5 · Retrieval (not built) | [`app/retrieval/README.md`](app/retrieval/README.md) |
+| 5 · Retrieval | [`app/retrieval/README.md`](app/retrieval/README.md) |
 
 ## Layout
 
@@ -29,8 +29,8 @@ backend/
 │   ├── ingestion/    # Component 1: client, normalizer, store, scorer, exporter
 │   ├── structural/   # Component 3: selection, content, tree-sitter, graph, validation
 │   ├── intent/       # Component 4: selection, context, LLM, validation, graph, review, evaluation
-│   ├── retrieval/    # Component 5: not built
-│   └── main.py       # FastAPI factory; /health only
+│   ├── retrieval/    # Component 5: hybrid retrieval, fusion, synthesis, API
+│   └── main.py       # FastAPI factory; /health + retrieval routes
 ├── tests/            # contract tests grouped by component
 ├── pyproject.toml
 └── README.md
@@ -42,7 +42,7 @@ backend/
 - **Errors** — `app/core/errors.py`. `TransientUpstreamError`, `RateLimitError`, `InvalidRecordError`, `GraphWriteError`, `InsufficientEvidenceError`.
 - **Logging** — `app/core/logging.py`. Structured JSON records with request/component/record context.
 - **Domain records** — `app/domain/records.py`, `record_types.py`, `evidence_ids.py`. Content-addressed evidence records and the stable ID strategy shared by every component.
-- **API** — `app/main.py` exposes `GET /health` only. It deliberately does not touch Neo4j, so CI never depends on a paid database being awake.
+- **API** — `app/main.py` exposes `GET /health` plus the retrieval routes. `/health` deliberately does not touch Neo4j, so CI never depends on a paid database being awake.
 
 ## Setup
 
@@ -68,7 +68,32 @@ curl http://localhost:8000/health
 # {"service":"why-code","status":"ok","version":"0.0.1"}
 ```
 
-Only `/health` exists. `POST /api/v1/ask` belongs to the unbuilt retrieval component.
+Only `/health` is always live. The answer routes (`POST /ask`, also at `/api/v1/ask`, plus decision/evidence/entity-history lookups and `/feedback`) return `503` until a retrieval service is injected into `create_app`.
+
+### Prepared judge demo
+
+The Phase 10 demo runs the real retrieval pipeline against a deterministic
+in-memory graph, so it needs no Neo4j or model credentials:
+
+```bash
+cd backend
+PYTHONPATH=. .venv/bin/uvicorn app.main:create_demo_app --factory --reload
+
+curl http://localhost:8000/demo/script
+curl -X POST http://localhost:8000/demo/rehearse \
+  -H 'content-type: application/json' -d '{}'
+```
+
+`create_demo_app()` exposes the same fixed `/demo/script`, `/demo/ask` and
+`/demo/rehearse` flow used by the frontend `/demo` page, and also mounts the
+normal `/ask` routes against the fixture service. `/demo/ask` accepts only the
+five script questions (`400` otherwise). The response includes named checks and
+a measured latency against an 8,000 ms budget / 5,000 ms target. That latency is
+fixture-pipeline latency, not a live Neo4j or model round trip; see
+[`app/retrieval/README.md`](app/retrieval/README.md#prepared-judge-demo-phase-10).
+
+CORS allows `http://localhost:3000` and `http://127.0.0.1:3000` for the demo
+frontend.
 
 ## Pipeline
 
@@ -112,10 +137,29 @@ ruff check app tests
 mypy app
 ```
 
-Current state: **681 passed, 8 skipped**, ruff clean, mypy clean over 120 source files.
+Current state: **1030 passed, 9 skipped**, ruff clean, mypy clean over 164 source files.
 
 - `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection. The canonical suite excludes it.
-- The 8 skipped tests are live-Neo4j integrations. Enable them with `WHYCODE_TEST_NEO4J_URI` plus `_USER`, `_PASSWORD` and `_DATABASE`.
+- 8 skipped tests are live-Neo4j integrations. Enable them with `WHYCODE_TEST_NEO4J_URI` plus `_USER`, `_PASSWORD` and `_DATABASE`.
+- The 9th skip is the live-Groq smoke test (`tests/intent/test_llm_live.py`). It sends exactly one tiny request with a throwaway ledger; enable it with `WHYCODE_TEST_LLM=1` plus `WHYCODE_TEST_LLM_API_KEY`.
+- The normal suite never calls a model: `StaticProvider` and a stub HTTP client cover the LLM path offline.
+
+## LLM quota
+
+Every provider call goes through `app/intent/llm/limits.py`, which enforces the published per-minute/per-day caps and persists usage per model per UTC day in `$WHYCODE_ARTIFACTS_DIR/intent/llm_budget.json`.
+
+| Variable | Required | Default |
+| --- | :---: | --- |
+| `WHYCODE_LLM_RPM` | — | `30` |
+| `WHYCODE_LLM_RPD` | — | `1000` |
+| `WHYCODE_LLM_TPM` | — | `8000` |
+| `WHYCODE_LLM_TPD` | — | `200000` |
+| `WHYCODE_LLM_BUDGET_REQUESTS` | — | provider cap |
+| `WHYCODE_LLM_BUDGET_TOKENS` | — | provider cap |
+| `WHYCODE_LLM_BUDGET_FILE` | — | `<artifacts>/intent/llm_budget.json` |
+| `WHYCODE_LLM_REASONING_EFFORT` | — | — (`low`/`medium`/`high`, gpt-oss only) |
+
+With the shipped `.env` (100 requests / 50K tokens per day on Groq's 1K / 200K caps), repeated test runs cannot exhaust the key: the guard refuses with `QuotaExceededError` and tells you which variable or ledger to reset.
 
 ## Environment
 
@@ -130,8 +174,10 @@ Current state: **681 passed, 8 skipped**, ruff clean, mypy clean over 120 source
 | `WHYCODE_LLM_MODEL` | — | `gpt-4o-mini` |
 | `WHYCODE_LLM_BASE_URL` | — | `https://api.openai.com/v1` |
 | `WHYCODE_LLM_TIMEOUT_SECONDS` | — | `60` |
+| `WHYCODE_LLM_MAX_OUTPUT_TOKENS` | — | `2500` |
 | `WHYCODE_ARTIFACTS_DIR` | — | `artifacts` |
 | `WHYCODE_TEST_NEO4J_URI` | — | — |
+| `WHYCODE_TEST_LLM` | — | — |
 
 ## Product decisions
 

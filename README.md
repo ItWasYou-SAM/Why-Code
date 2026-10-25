@@ -11,19 +11,19 @@
   <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" />
   <img alt="Neo4j" src="https://img.shields.io/badge/Neo4j-AuraDB-4581C3?logo=neo4j&logoColor=white" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-681%20passed-2ea44f" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1030%20passed-2ea44f" />
   <img alt="Status" src="https://img.shields.io/badge/status-backend%20pipeline-blue" />
-  <img alt="Retrieval" src="https://img.shields.io/badge/retrieval-not%20built-orange" />
+  <img alt="Retrieval" src="https://img.shields.io/badge/retrieval-built-2ea44f" />
 </p>
 
 **WhyCode** explains *why* a codebase works the way it does, using its own development history as evidence. It ingests merged pull requests and the conversation around them, builds a Neo4j graph of files, symbols, regions, people and decisions, and extracts evidence-linked engineering decisions. Every claim is traceable; when the evidence is insufficient, the system refuses instead of guessing.
 
 > [!IMPORTANT]
-> **Work in progress.** The backend pipeline through decision extraction is implemented and tested. The GraphRAG answer service and the published UI are not built yet — see [Built vs. what's left](#built-vs-whats-left).
+> **Work in progress.** The backend pipeline through the GraphRAG answer service is implemented and tested, including the read-only Neo4j retrieval adapter. The production embedding model and the published UI are not built yet — see [Built vs. what's left](#built-vs-whats-left).
 
 ## Screenshots
 
-The UI below is the current **local prototype**, running on bundled fixture data. The frontend source is not published in this repository yet; the screenshots show the intended product experience.
+The UI below is the current **local prototype**, running on bundled fixture data. The local frontend source lives in `frontend/` (currently excluded from the published tree), and its `/demo` route calls the prepared backend directly; the screenshots show the intended product experience.
 
 <p align="center">
   <img src="assets/readme/ask.png" alt="WhyCode ask screen with repository selector and example questions" width="100%" />
@@ -48,9 +48,9 @@ The UI below is the current **local prototype**, running on bundled fixture data
 ## How it works
 
 <p align="center">
-  <img src="assets/readme/architecture.png" alt="WhyCode pipeline: GitHub history → ingestion and SQLite → graph builder → structural enricher → decision extractor, all sharing Neo4j; GraphRAG retrieval, answer API and evidence UI are next." width="100%" />
+  <img src="assets/readme/architecture.png" alt="WhyCode pipeline: GitHub history → ingestion and SQLite → graph builder → structural enricher → decision extractor → GraphRAG retrieval and answer API, all sharing Neo4j; the evidence UI is next." width="100%" />
 </p>
-<p align="center"><sub><b>Built:</b> GitHub → ingestion/SQLite → graph → structure → decisions. <b>Next:</b> retrieval → answer API → UI.</sub></p>
+<p align="center"><sub><b>Built:</b> GitHub → ingestion/SQLite → graph → structure → decisions → retrieval/answer API → judge demo UI. <b>Next:</b> production embedding provider and live UI integration.</sub></p>
 
 The LLM is a **proposer**, never the authority: deterministic code validates every citation against the evidence store and graph, computes confidence, detects supersession, and writes the graph.
 
@@ -80,7 +80,38 @@ curl http://localhost:8000/health
 # {"service":"why-code","status":"ok","version":"0.0.1"}
 ```
 
-Only `/health` exists today. The answer API (`POST /api/v1/ask`) is part of the unbuilt retrieval component.
+`/health` is always live. The answer API (`POST /ask`, also mounted at `/api/v1/ask`) is available when a retrieval service is injected; without one those routes return `503`.
+
+### Run the prepared judge demo
+
+The `/demo` flow uses the real retrieval pipeline against a deterministic
+fixture graph, so it needs no Neo4j or model credentials. In one terminal:
+
+```bash
+cd backend
+PYTHONPATH=. .venv/bin/uvicorn app.main:create_demo_app --factory --reload
+curl -X POST http://localhost:8000/demo/rehearse \
+  -H 'content-type: application/json' -d '{}'
+```
+
+In another (local working tree — `frontend/` is not in the published tree yet):
+
+```bash
+cd frontend
+npm install
+npm run dev
+# open http://localhost:3000/demo
+```
+
+The demo page calls the backend directly (default
+`http://localhost:8000`; override with `NEXT_PUBLIC_API_BASE_URL`). It shows the
+five-question script, then answer, citations, evidence cards, people, decision
+timeline, supersession labels and the interactive graph path. The fifth
+question asks about the logo and must refuse with `insufficient_evidence`.
+
+> The measured latency is local fixture-pipeline latency, not a live Neo4j or
+> model round trip. `/demo/rehearse` checks the script deterministically and
+> reports the measured value against the 8,000 ms budget / 5,000 ms target.
 
 ### Run the pipeline
 
@@ -117,7 +148,7 @@ ruff check app tests
 mypy app
 ```
 
-Current result: **681 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips are opt-in live-Neo4j tests.
+Current result: **1030 passed, 9 skipped**, ruff clean, mypy clean. Eight skips are opt-in live-Neo4j tests; the ninth is the opt-in live-LLM smoke test.
 
 > `tests/structure/` is a legacy parallel contract suite that conflicts with `tests/structural/` at collection time. The canonical suite excludes it.
 
@@ -130,10 +161,10 @@ Current result: **681 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 | **2 · Neo4j graph builder** | ✅ | Graph mapping, commit-scoped regions, batched `MERGE` writer, constraints/indexes, integrity checks | Live AuraDB load is opt-in and was not executed here |
 | **3 · Structural enricher** | ✅ | Tree-sitter Python symbols/imports/references, YAML/TOML/env config keys, docs, regions, validation | Python only; JS/TS/Rust and lock files are skipped by design |
 | **4 · Decision extractor** | ✅ | Candidate detection, context packing, strict schemas, evidence/claim/rule gates, confidence, supersession, dedupe, review queue, Neo4j writer, hand-curated golden set + deterministic evaluation | Live LLM acceptance and the public golden-suite run are not demonstrated in this repo (public cases are curated but unexecuted) |
-| **5 · GraphRAG retrieval** | ❌ | — | Query planner, hybrid retrieval, graph expansion, context packing for answers, synthesis with citations, refusal policy, `/api/v1/*` |
-| **6 · Evidence UI** | 🟡 | Local Next.js prototype (screenshots above) | Source not published; no live API integration; not deployed |
+| **5 · GraphRAG retrieval** | ✅ | Fixed retrieval pipeline (exact + full-text + vector + graph expansion), static read-only Neo4j `GraphBackend`/`LookupBackend` adapter, WRRF fusion, reranking, evidence packing, constrained synthesis, citation/quote validation, four refusal modes, `/ask` and supporting API routes, deterministic Phase 10 judge demo, 321 retrieval contract tests | A production embedding model and the golden-question acceptance run are not included; live latency is not measured |
+| **6 · Evidence UI** | 🟡 | Local Next.js source in `frontend/` (currently excluded from the published tree), including the `/demo` judge workspace and the fixture-mode product screens | Only `/demo` is wired to the prepared backend; the general screens still use fixtures, and nothing is deployed |
 
-**Also not done:** retrieval golden-question suite, embeddings/vector index, Aura Agent/MCP integration, CI and Docker, live acceptance evidence for Components 1–4.
+**Also not done:** production embedding provider, retrieval golden-question acceptance run, Aura Agent/MCP integration, CI and Docker, live acceptance evidence for Components 1–5.
 
 ## Project layout
 
@@ -147,10 +178,11 @@ Current result: **681 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 │   │   ├── graph/         # Component 2  → README
 │   │   ├── structural/    # Component 3  → README
 │   │   ├── intent/        # Component 4  → README
-│   │   ├── retrieval/     # Component 5  (not built)
-│   │   └── main.py        # FastAPI factory; /health only
-│   ├── tests/             # 681 tests, grouped by component
+│   │   ├── retrieval/     # Component 5  → README
+│   │   └── main.py        # FastAPI factory; /health + retrieval routes
+│   ├── tests/             # contract tests, grouped by component
 │   └── README.md          # backend guide
+├── frontend/              # Next.js product prototype + /demo judge workspace
 ├── docs/                  # decisions and validation reports
 ├── assets/readme/         # banner + screenshots
 ├── artifacts/             # generated outputs (git-ignored)
@@ -181,12 +213,17 @@ Current result: **681 passed, 8 skipped**, ruff clean, mypy clean. The 8 skips a
 | `WHYCODE_NEO4J_USER` | ✅ | — | Neo4j user |
 | `WHYCODE_NEO4J_PASSWORD` | ✅ | — | Neo4j password |
 | `WHYCODE_NEO4J_DATABASE` | — | `neo4j` | Target database |
-| `WHYCODE_LLM_API_KEY` | ✅ | — | OpenAI-compatible key |
+| `WHYCODE_LLM_API_KEY` | ✅ | — | OpenAI-compatible key (Groq works as-is) |
 | `WHYCODE_LLM_MODEL` | — | `gpt-4o-mini` | Extraction model |
 | `WHYCODE_LLM_BASE_URL` | — | `https://api.openai.com/v1` | Compatible endpoint |
 | `WHYCODE_LLM_TIMEOUT_SECONDS` | — | `60` | LLM request timeout |
+| `WHYCODE_LLM_RPM` / `_RPD` | — | `30` / `1000` | Published request caps |
+| `WHYCODE_LLM_TPM` / `_TPD` | — | `8000` / `200000` | Published token caps |
+| `WHYCODE_LLM_BUDGET_REQUESTS` | — | provider cap | Tighter daily request ceiling |
+| `WHYCODE_LLM_BUDGET_TOKENS` | — | provider cap | Tighter daily token ceiling |
 | `WHYCODE_ARTIFACTS_DIR` | — | `artifacts` | Output directory |
 | `WHYCODE_TEST_NEO4J_URI` | — | — | Enables live Neo4j tests |
+| `WHYCODE_TEST_LLM` | — | — | Enables the one-call live LLM test |
 
 ---
 

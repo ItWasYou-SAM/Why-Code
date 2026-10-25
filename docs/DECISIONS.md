@@ -1244,3 +1244,522 @@ handling, refusal scoring and the `evaluate` CLI;
 golden cases and pins the documented target-recall gap.
 
 **Status.** active
+
+---
+
+## D-0049 — 2026-10-24 — LLM quota is enforced locally, per model and UTC day
+
+**Decision.** Every model call goes through `RateLimitedProvider`
+(`backend/app/intent/llm/limits.py`). It enforces the published per-minute and
+per-day request/token caps, paces calls to the request rate, and persists usage
+per model and UTC day in `$WHYCODE_ARTIFACTS_DIR/intent/llm_budget.json`. A run
+may set *lower* daily ceilings (`WHYCODE_LLM_BUDGET_REQUESTS`,
+`WHYCODE_LLM_BUDGET_TOKENS`) but never higher ones than the provider caps; a
+value above the cap fails at construction.
+
+**Why.** The development key is on Groq's free/dev plan (30 req/min, 1K
+req/day, 8K tokens/min, 200K tokens/day for `openai/gpt-oss-20b`). Discovering
+the cap as a 429 is expensive: the retry policy can spend several requests
+before giving up, and one forgotten test loop can consume the daily allowance,
+blocking real extraction for hours. Tokens are reserved before the HTTP call
+and reconciled against the provider's reported `usage`, so a crashed process
+still counts what it asked for. A refused request raises `QuotaExceededError`
+before any network traffic.
+
+**Consequences.** The shipped local `.env` self-imposes 100 requests and 50K
+tokens per day, leaving 90% of the daily quota in reserve, and pins
+`reasoning_effort=low` (gpt-oss bills reasoning tokens as output). A packed
+prompt is kept under the 8K tokens/minute cap by also lowering
+`WHYCODE_INTENT_MAX_CONTEXT_TOKENS`; the guard refuses, with the arithmetic,
+any single request that cannot fit. Raising the daily ceilings is an explicit,
+one-variable act, not a side effect of rerunning tests. The ledger is a plain
+JSON file, so a new day resets naturally and a deliberate reset is visible in
+git-ignored artifacts.
+
+**Tests.** `tests/intent/test_llm_limits.py` pins pacing, both daily ceilings,
+reservation reconciliation, failure accounting, persistence and UTC rollover;
+`tests/intent/test_llm_provider.py` pins the payload (model, `max_tokens`,
+`reasoning_effort`, strict JSON schema), usage capture and HTTP error mapping;
+`tests/intent/test_llm_live.py` is opt-in and spends exactly one request.
+
+**Status.** active
+
+---
+
+## D-0050 — 2026-10-24 — Retrieval Phase 1: deterministic question understanding with a constrained entity fallback
+
+**Decision.** Question understanding is a fixed two-step boundary, not an
+agent. First a pure deterministic classifier selects one of the six question
+classes from phrases, vocabulary and already-matched entity types. Exact
+catalog identifiers (config keys, symbols, files, decision IDs and explicit
+person logins) are accepted immediately. Lexical matches must be distinctive
+and clear a score threshold; a lone generic word cannot select an entity.
+Decision claims need at least two matched distinctive terms, or an exact
+identifier. Only when this pass produces no confident entity — or two
+same-type lexical candidates are too close — does a constrained LLM step run.
+
+The LLM receives a shortlist of catalog options and may return only
+`option_id` values plus display text. It never supplies a graph key, a
+normalized identifier, a question class or a time constraint. Unknown option
+IDs are discarded and fall back to deterministic candidates/shortlist;
+if no LLM is configured, extraction degrades deterministically with a warning.
+The original question remains the vector text. Relative dates (“last year”)
+are unsupported; only explicit years/month ranges become `TimeConstraint`.
+Question output carries `entities`, `time_constraint` and
+`requires_supersession_check`; `repo`, `classification`, `extraction_method`
+and `warnings` are additive diagnostics.
+
+**Why.** The pipeline already refuses to answer without a catalog-backed
+entity. Letting a model decide which entity the user asked about, or whether
+the question is config vs code vs history, reintroduces the hallucination
+surface the rest of the pipeline is built to remove. Exact-first matching also
+keeps the common demo questions reproducible offline and makes the LLM an
+auditable fallback rather than a required dependency.
+
+**Consequences.** `question/entity_catalog.py` is the read-only Neo4j allowlist
+loader; `EntityIndex`/`KnownEntity` remain the dependency-free test form.
+`QuestionClassifier.classify()` keeps the pipeline contract (returns
+`QuestionType`), while `classify_details()` exposes weights and reasons for
+debugging. `QueryBuilder` converts the rich Phase 1 plan into the pipeline's
+compact `RetrievalQuery`; `build_retrieval_query()` keeps the richer
+identifiers, terms, graph seeds and time constraint for inspection. The
+offline `understand` CLI can read a saved catalog JSON; the existing `ask` CLI
+still delegates to `RetrievalService`. Component numbering is unchanged:
+intent is Component 4, retrieval is Component 5.
+
+**Tests.** `tests/retrieval/test_question_classifier.py`,
+`test_entity_extractor.py`, `test_entity_catalog.py`,
+`test_query_builder.py`, `test_question_fixtures.py` and
+`test_understand_cli.py` pin exact-first precedence, claim conservatism,
+catalog-only graph keys, unknown-option rejection, deterministic degradation,
+explicit time parsing, stable reruns and the six-class fixture set.
+
+**Status.** active
+
+---
+
+## D-0051 — 2026-10-24 — Retrieval Phase 2: indexes and embeddings are created during graph setup
+
+**Decision.** The retrieval layer declares nine Neo4j indexes: four full-text
+indexes (`decision_fulltext`, `evidence_fulltext`, `symbol_fulltext`,
+`config_fulltext`) and five vector indexes (`decision_embedding`,
+`evidence_embedding`, `symbol_embedding`, `config_embedding`,
+`code_region_embedding`). All vector indexes target `n.embedding` with the
+configured dimensions and similarity function. The DDL is data in
+`IndexManager`, and creation is an idempotent sweep run by both Component 3
+(`StructuralGraphWriter.prepare_schema()`) and Component 4
+(`IntentGraphWriter.prepare_schema()`). Loading the structural or intent half
+first produces the same database state; the request path never creates an
+index.
+
+The embedded text is fixed by label: `Decision.claim + rationale`,
+`Evidence.excerpt`, `Symbol.qualified_name + docstring`, `ConfigKey.key` and
+`CodeRegion.excerpt`. Structural extraction now records Python docstrings on
+`Symbol` and a bounded, source-derived excerpt on `CodeRegion`, so the graph
+contains the fields the vector indexes promise. At write time
+`embed_graph_records()` computes each vector before the first merge with the
+injected `EmbeddingProvider`; an empty, non-finite or dimension-mismatched
+vector aborts the load. Nodes with no target text deliberately receive no
+embedding instead of a zero vector. `HashingEmbeddingProvider` remains the
+deterministic offline provider; a semantic provider can be injected without
+changing the writers.
+
+**Why.** An index created lazily on the request path is a latency spike and a
+permission failure waiting to happen, and a vector index over nodes that never
+received a vector silently returns nothing. Running the same sweep from both
+graph writers keeps setup order-independent and makes the index contract
+reviewable as data. Storing only the projected retrieval text in the graph
+preserves the existing rule that full content lives in the blob store.
+
+**Consequences.** Index DDL must evolve with the embedded-label list; adding a
+new indexed label requires both a `VectorTarget` and a source field on the
+graph record. Changing embedding dimensions or similarity requires recreating
+the vector index, because Neo4j index options are immutable. The deterministic
+provider keeps tests and reruns byte-identical but is not semantically useful;
+production retrieval must inject a real embedding provider with matching
+dimensions.
+
+**Tests.** `tests/retrieval/test_index_manager.py` pins every index name,
+label, field and option; `tests/retrieval/test_index_embeddings.py` pins text
+projection, deterministic vectors, empty-text handling and dimension failure;
+`tests/structural/test_graph_writer.py` and
+`tests/intent/test_intent_graph_writer.py` pin setup-time index creation and
+write-time embeddings; structural extraction tests pin docstrings and region
+excerpts.
+
+**Status.** active
+
+---
+
+## D-0052 — 2026-10-24 — Retrieval Phase 3: four ranked sources and the Neo4j adapter
+
+**Decision.** Phase 3 keeps four independent retrieval signals and fuses
+ranks, never raw scores. Exact search resolves identifiers directly and
+through the decision's provenance edges (`GOVERNS`, `SUPPORTED_BY`,
+`PRODUCED_IN`, `MOTIVATED_BY`); full-text queries
+`decision_fulltext`; vector search queries `decision_embedding` with the
+question embedded once; graph expansion then pulls evidence, targets, pull
+requests, incidents, later decisions and conflicts around the top fused
+candidates. Exact, full-text and vector retrieval run concurrently when
+`parallel_retrieval` is on. Graph expansion necessarily follows the first
+fusion, and its results enter a second fusion as the `graph` source. WRRF
+still contributes only `weight / (k + rank)`.
+
+The production graph side lives in `app/retrieval/retrieval/neo4j_backend.py`.
+`Neo4jGraphBackend` implements both `GraphBackend` and `LookupBackend` for
+`Neo4jClient`. Every statement is static, every user value is a parameter,
+and every query is repository-scoped. It is read-only. The vector path checks
+that the embedding is non-empty, finite and the configured width before any
+query runs; the index is over-fetched, then filtered by repo and trimmed to
+the requested limit.
+
+Graph expansion uses the relationship types the writers actually create:
+`SUPERSEDES`, `REVERSES` and `REVISES` for later decisions, and
+`CONFLICTS_WITH` for contested ones. The plan's illustrative
+`SUPERSEDED_BY|REVERSED_BY|REVISED_BY` names are not written by Component 4
+and are deliberately not queried.
+
+**Why.** A model must never guess an identifier when the graph can answer
+`retry.max_attempts` directly. Keeping BM25, cosine and exact match as
+independent ranked lists avoids comparing incompatible scores. The graph
+traversal is what turns the result into GraphRAG: a decision is returned with
+the evidence and later decisions that make it defensible, not merely a
+similar-looking text chunk. Putting the Cypher behind a static adapter keeps
+the pipeline testable without Neo4j and keeps user text out of query strings.
+
+**Consequences.** `RetrievalService` can now be wired with a real
+`Neo4jClient` without changing any retrieval stage. Search candidates carry
+per-source ranks; graph expansion supplies target and evidence IDs, target
+paths (`Label:identifier`), incidents and later decisions. The adapter
+over-fetches vector neighbours before applying the repo filter, so a shared
+database with several repositories still returns enough candidates.
+Embedding-width changes still require recreating the vector index (D-0051);
+the request path fails closed on a mismatch. A live AuraDB latency run is not
+part of this change.
+
+**Tests.** `tests/retrieval/test_neo4j_backend.py` pins the exact, full-text,
+vector and expansion Cypher shape; parameterization and repository scoping;
+decision/evidence mapping; target path formatting; supersession/conflict
+collection; lookup methods; and empty, non-finite or wrong-width vector
+failure before any query. The existing Phase 3 tests pin ranks, limits,
+deduplication, the WRRF formula and deterministic ordering.
+
+**Status.** active
+
+---
+
+## D-0053 — 2026-10-24 — Retrieval Phase 4: WRRF and explainable reranking
+
+**Decision.** Phase 4 keeps the four source rankings separate and fuses them
+with weighted reciprocal rank fusion:
+
+```text
+WRRF(c) = Σ_s weight_s / (k + rank_s(c))
+k = 60
+exact = 5.0, fulltext = 2.0, vector = 1.5, graph = 2.5
+```
+
+No cosine similarity is averaged with a BM25 score. A source contributes only
+its own rank; absence contributes nothing. The implementation lives in
+`app/retrieval/retrieval/fusion.py`, and `FusedCandidate.contributions` keeps
+the per-source breakdown for audit.
+
+Reranking in `app/retrieval/retrieval/reranker.py` is deterministic and
+configurable. It adds `+0.20` for a direct graph path to an **exact** entity
+identity, `+0.12` for at least two independent evidence kinds, `+0.05` when no
+supersession edge was found, `+0.10` for a review comment anchored to a
+governed file or code region, and `+0.15` when the target matches the extracted
+entity. It subtracts `0.25` for superseded/reversed decisions, `0.08` for a
+single weak evidence source, `0.20` for an unrelated target, and `0.05` for old
+evidence without a supersession check. Every applied rule appends a reason
+string. The final set is capped at five decisions and ties break by decision
+ID.
+
+An exact path requires identifier identity, not a substring: `retry` may be
+relevant to `retry.max_attempts` but does not earn the exact-path bonus. A
+lexical or LLM extraction whose normalized identifier equals the graph target
+does earn it because the target is exact. A file entity matches a
+`CodeRegion:path:start-end` target for the same file. A review comment is
+anchored only when its path is a target path or the question's file and its
+line range overlaps the governed region; the right file outside the region,
+or a different file, does not count. Evidence of one kind is one source even
+when several items exist. Evidence is stale when its newest dated item is older
+than `stale_evidence_days` (365 by default); undated evidence is never called
+old, and a later decision replaces the stale penalty with supersession.
+
+**Why.** Rank fusion is the only comparison that is valid across incompatible
+scales. The reranking rules encode the product's definition of a defensible
+answer: it must connect to the asked code, be corroborated, still be current,
+and be anchored in the region under discussion. Keeping the rules additive and
+reason-bearing means a ranking can be replayed and explained rather than
+tuned by an opaque score.
+
+**Consequences.** A candidate with lower fused agreement can overtake a
+higher-scoring single-source candidate when it has an exact target path, two
+evidence kinds, and no supersession. Historical decisions remain retrievable
+but carry a penalty and are relabelled `superseded` when expansion found a later
+decision. The cap keeps answers narrow: at most five decisions, fewer when the
+graph has fewer defensible candidates, never padded with unrelated ones.
+
+**Tests.** `tests/retrieval/test_fusion.py` pins the formula, the four weights,
+`k`, per-source ranks, merge behaviour, the absence of raw scores and
+deterministic ties. `tests/retrieval/test_reranker.py` pins every bonus and
+penalty, exact-vs-lexical target matching, file/region matching, review-anchor
+path and line overlap, weak-source counting, evidence age, supersession
+relabelling, promotion of a lower fused score, and the five-decision cap.
+
+**Status.** active
+
+---
+
+## D-0054 — 2026-10-25 — Retrieval Phase 5: the compact evidence pack
+
+**Decision.** `EvidencePacker` produces the model's entire world in one
+deterministic text block. The order is fixed: question, candidate decision,
+evidence, graph path, supersession and answer rules. Evidence follows the
+product priority: the decision claim and status first; then the changed diff
+hunk, review comments anchored to the changed lines, commit messages, linked
+issue context and broader PR provenance; then the superseding decision as its
+own section; author and date metadata travel on every evidence row.
+
+Each evidence row is rendered as `[E#] <kind> by <author> on <date>`, followed
+by its location (`PR #`, `Issue #`, `SHA`, file and line span) and a quoted
+excerpt. Kinds have human labels (`Changed diff hunk`, `Review comment`,
+`Commit message`, `Issue comment`) rather than raw record types. The graph path
+inside the pack uses the same aliases the model is allowed to cite
+(`Decision:D1`, `Evidence:E1,E2`), while `EvidencePack.graph_path` and the API
+keep real IDs for inspection. A changed file's excerpt is its patch, so the
+pack contains a real hunk rather than a filename.
+
+The intent writer now copies `author`, `created_at`, `path`, `start_line`,
+`end_line`, `commit_sha` and `issue_number` from the selected source record onto
+the `Evidence` wrapper. The retrieval adapter maps those properties and, for
+older graphs, infers a commit SHA or issue number from the GitHub URL. Without
+this, the packer would only be able to show metadata in tests.
+
+`max_evidence_items` bounds rows and `max_context_tokens` bounds the rendered
+text. Rows are selected round-robin across decisions so one decision cannot
+crowd out another. When the budget is tight, the lowest-priority evidence is
+dropped first and the omitted IDs are recorded; aliases are assigned only
+after selection, so an omitted item can never be cited.
+
+**Why.** The answer model must not see a raw repository dump. A compact pack
+ordered by evidentiary strength keeps the diff and the discussion that explains
+it ahead of incidental provenance, and it makes the answer reproducible. Dates,
+authors, SHAs and issue numbers are what let a reader audit a claim without
+trusting the model's summary. Alias-only paths make the citation contract
+consistent: the model can only cite what it was given.
+
+**Consequences.** The retrieval pack and the intent writer share the same
+evidence metadata contract. Older graphs still work through URL inference but
+may show fewer attributions until re-ingested. The pack text is longer per row
+because it now carries dates and identifiers; the token guard removes the
+lowest-priority rows first, not the rules or aliases.
+
+**Tests.** `tests/retrieval/test_evidence_packer.py` pins the six sections and
+their order, diff → review → commit → issue priority, human labels,
+author/date/SHA/issue rendering, readable targets, alias-only graph paths,
+omitted-evidence filtering, budget drops and preservation of the answer rules at
+a tiny budget.
+`tests/retrieval/test_neo4j_backend.py` pins metadata mapping and URL inference.
+`tests/intent/test_intent_graph_writer.py` pins the writer metadata and patch
+excerpt.
+
+**Status.** active
+
+---
+
+## D-0055 — 2026-10-25 — Retrieval Phase 6: constrained answer synthesis
+
+**Decision.** `AnswerSynthesizer` turns one evidence pack into one structured
+answer. The model has no retrieval step, no tool loop and no memory: it sees
+the fixed system prompt (synthesis, not research), a user prompt that embeds
+the pack, and one provider-facing JSON schema.
+
+The system prompt is the product contract: use only supplied evidence, cite
+every factual statement, explain conflicts, state reversals, return
+`INSUFFICIENT_EVIDENCE` when evidence is insufficient, never invent file
+names, PR numbers, people, dates or quotes, use no outside knowledge, and stay
+concise and technical.
+
+The provider schema is the documented five-field envelope —
+`answer_status`, `answer`, `citations`, `caveats`, `confidence` — with every
+property required and `additionalProperties: false`. It is defined explicitly
+in `ANSWER_SCHEMA` rather than derived from `AnswerDraft.model_json_schema()`,
+so the generation contract stays exactly the one in the plan; Pydantic still
+validates the parsed response, and `citations` and `caveats` are now required
+fields on `AnswerDraft` as well.
+
+Structured output constrains shape, not truth. `CitationValidator` resolves
+every declared and inline citation against the pack, rejects unknown IDs and
+decision aliases, checks each factual sentence carries at least one resolved
+evidence ID, and verifies quoted text against the excerpts the model saw.
+Confidence is the minimum of the model's label and a deterministic ceiling
+derived from evidence count and kinds; `contested` answers are capped at
+`medium`. One failed response is regenerated with a strict corrective prompt;
+a second failure becomes `insufficient_evidence`.
+
+Contested and historical cases are decided before synthesis.
+`RefusalHandler` returns `contested` with both claims and their evidence,
+`superseded_only` when every candidate is historical, and
+`insufficient_evidence` when no defensible trail exists. Those paths never
+call the model, so a conflict cannot be smoothed over by generation.
+
+**Why.** A synthesis model is useful only inside a narrow box. Separating the
+provider schema from the Pydantic model keeps the generation contract explicit
+and testable, and keeping citation validation outside the model means a
+schema-valid response can still be rejected for unsupported claims. The
+deterministic conflict and history paths protect the answer's truth value when
+extra prose would add risk rather than information.
+
+**Consequences.** The answer schema no longer drifts silently when
+`AnswerDraft` gains a field; a new field must be added to `ANSWER_SCHEMA`
+deliberately. Every answer still passes through the validator, and the API can
+return `insufficient_evidence` even when the model returned syntactically
+valid JSON.
+
+**Tests.** `tests/retrieval/test_answer_synthesizer.py` pins the documented
+schema, the required-field list, all eight system rules, the user prompt's
+field names, the token budget line, the corrective retry, malformed/extra-field
+handling and contested status preservation.
+`tests/retrieval/test_citation_validator.py` pins unknown-ID rejection,
+claim-level grounding, quote verification and the confidence ceiling.
+
+**Status.** active
+
+---
+
+## D-0056 — 2026-10-25 — Retrieval Phase 7: claim-level citation validation
+
+**Decision.** `CitationValidator` is the final anti-hallucination gate for
+every generated answer. It performs six checks in order:
+
+1. extract declared and inline evidence citations;
+2. reject IDs not present in the pack, including decision aliases such as
+   `[D1]`;
+3. reject a cited evidence item whose `decision_id` is not one of the selected
+   decisions, so evidence retrieved for an unrelated decision cannot ground an
+   answer;
+4. split the answer into atomic claims and require every factual claim to carry
+   at least one resolved evidence ID;
+5. check specific details inside a claim — file names, people, PR and issue
+   numbers, dates, years and commit SHAs — against the evidence cited by the
+   *same* claim;
+6. verify quoted strings against the cited excerpts, including
+   ellipsis-separated fragments.
+
+The result records `unsupported_claims`, `invalid_citations`,
+`quote_mismatches` and `fabricated_details` alongside `citation_valid` and
+`final_confidence`. Invalid citations, quote mismatches and fabricated details
+force `final_confidence` to `none`; uncited claims lower it to `low`. A failed
+validation is regenerated once with the strict corrective prompt; a second
+failure returns `insufficient_evidence`.
+
+**Why.** Answer-level validation is too coarse: a paragraph can carry one
+correct citation and several invented specifics. Splitting into atomic claims
+names exactly which statement failed, and checking specifics only against the
+evidence the claim itself cites prevents a valid citation from laundering an
+invented file, person, PR, issue, date or SHA. Refusing to let `[D1]` count as
+a citation keeps the model inside the evidence-alias namespace it was given.
+
+**Consequences.** The validator is stricter: a claim that cites `E1` but
+mentions a file or PR only present in `E2` is now unsupported. Answers that
+pass are therefore grounded claim by claim, not merely cited somewhere. The
+new `fabricated_details` field is additive to the documented result shape and
+is available for audit and UI display.
+
+**Tests.** `tests/retrieval/test_citation_validator.py` pins unknown-ID
+rejection, decision-alias rejection, unselected-decision rejection,
+claim-level grounding, fabricated file/person/PR/issue/date/SHA detection,
+supported-specifics acceptance, quote verification, contested confidence cap
+and deterministic reruns.
+
+**Status.** active
+
+---
+
+## D-0057 — 2026-10-25 — Retrieval Phase 8: refusal is a feature
+
+**Decision.** `RefusalHandler` owns four deterministic refusal modes and never
+calls the model:
+
+- `NO_ENTITY` — no matching file, symbol, config key or decision. Exact
+  message: “I could not identify a relevant code entity or decision.”
+- `NO_DECISION` — an entity exists but no decision is connected to it, or no
+  candidate has graph evidence. Exact message: “The graph contains the code
+  entity but no defensible decision trail.”
+- `CONTESTED` — a candidate has `contested` status or a conflict edge. The
+  response shows both claims with their evidence aliases and states that the
+  ingested history conflicts; confidence is capped at `low`.
+- `SUPERSEDED_ONLY` — every candidate is historical because of its status or a
+  later-decision edge. The response explains the reversal trail: it names the
+  historical decision and claim, the superseding decision IDs, and tells the
+  reader to answer from the current decision. Confidence is `none`.
+
+Refusal results carry nearest candidates for the UI. The product claim is that
+answers come from the repository's own decision history, so the pipeline never
+falls back on general knowledge about the codebase.
+
+**Why.** A refusal that only says “I don’t know” hides the graph facts the
+system does have. The exact `NO_ENTITY`/`NO_DECISION` wording separates
+“nothing matched” from “something matched but has no rationale”, and the
+`SUPERSEDED_ONLY` explanation turns a dead end into a pointer at the current
+decision instead of restating an obsolete claim as truth. Keeping contested and
+historical handling deterministic means a conflict or reversal can never be
+smoothed over by generation.
+
+**Consequences.** `RefusalHandler.decide` delegates the historical branch to
+`superseded_only`, which adds the reversal trail and a caveat. Service callers
+receive the same `RefusalResult` shape as before; the answer text is richer and
+the caveats are explicit. The API still returns `insufficient_evidence` or
+`contested` with `decision_ids` and nearest candidates.
+
+**Tests.** `tests/retrieval/test_refusal_handler.py` pins the exact
+`NO_ENTITY`/`NO_DECISION` messages, all four mode triggers, contested
+two-sided output with evidence and its caveat, and superseded-only output that
+names the historical decision, deduplicates superseding IDs and explains the
+trail with and without a later ID. Service tests pin that refusal paths never
+call the generator.
+
+**Status.** active
+
+---
+
+## D-0058 — 2026-10-25 — Retrieval Phase 9: the answer API is the product surface
+
+**Decision.** Phase 9 exposes the retrieval pipeline through a documented HTTP
+surface. The primary endpoint is `POST /ask` (also mounted at
+`POST /api/v1/ask`):
+
+- The request carries the question, `include_graph_path`, `include_evidence`
+  and `max_evidence_items`.
+- The response carries `answer_status`, `answer`, `confidence`, `citations`,
+  `graph_path`, `supersession` and `retrieval_trace`, plus the supporting
+  `decision_ids`, `evidence`, `caveats` and `nearest_candidates` fields the UI
+  renders. The retrieval trace reports `exact_matches`, `fulltext_candidates`,
+  `vector_candidates`, `graph_candidates`, `fused_candidates` and
+  `selected_decisions`.
+- Refusals travel as `200` responses with the deterministic answer text and
+  confidence `none` (or `low` for contested), never as error statuses.
+
+Supporting reads complete the surface: `GET /decisions/{decision_id}`,
+`GET /evidence/{evidence_id}`, `GET /entities/{entity_id}/history`, and
+`POST /feedback` accepts `helpful`, `wrong` or `missing_evidence` verdicts.
+
+**Why.** An answer only helps a judge inside the product if the product can ask
+the question, read back the supporting graph facts and record what happened
+next. Keeping the surface small — one primary endpoint plus three reads and one
+feedback hook — matches the fixed-pipeline design: the API is transport only and
+never becomes an agent or a second retrieval path.
+
+**Consequences.** Refusals are contract responses, so the UI renders a
+first-class refusal instead of treating it as a transport error. Without a
+retrieval service the answer routes return `503`; an unknown repo returns `400`
+and unknown decision or evidence IDs return `404`.
+
+**Tests.** `tests/retrieval/test_api.py` pins the `/ask` contract shape, the
+versioned alias, validation errors, 503/400 handling, include flags, the
+decision, evidence, entity-history and feedback endpoints, and the Phase 9
+refusal contract shape through the primary endpoint.
+
+**Status.** active
